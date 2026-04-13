@@ -568,5 +568,5 @@ function exportJSON() {
 render();
 </script>
 </body>
-</html>`, totalPages, totalClusters, jsonData)
+</html>`, totalPages, totalClusters, jsonData, simJSON)
 }
