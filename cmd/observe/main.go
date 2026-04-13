@@ -31,11 +31,17 @@ func main() {
 	limit := flag.Int("n", 10, "number of entries to show")
 	stats := flag.Bool("stats", false, "show input-output statistics only")
 	cluster := flag.Bool("cluster", false, "show page clusters")
+	htmlOut := flag.String("html", "", "generate cluster review HTML to this path")
 	flag.Parse()
 
 	if *dbPath == "" || *wsPath == "" {
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	if *htmlOut != "" {
+		generateClusterHTML(*wsPath, *htmlOut)
+		return
 	}
 
 	if *cluster {
