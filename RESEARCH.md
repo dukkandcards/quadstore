@@ -267,6 +267,75 @@ mapping without theoretical overlay — what textual features on a page
 correlate with an entry appearing in the index, full stop. Not why. Just
 what.
 
+## Input-Output Observation (2026-04-13, second session)
+
+Following Jay's correction, we built `cmd/observe` to look at the raw
+mapping between entry terms and page text with no theory.
+
+### Initial claim: 46.6% of entry-page pairs have no text match
+
+This was too strict. Our first-pass matching only checked exact string
+containment. After accounting for morphological variants:
+
+| Category | Pairs | Rate |
+|---|---|---|
+| Exact match (term in text) | 125 | 25.8% |
+| Plural/singular variant | 15 | 3.1% |
+| Possessive variant | 6 | 1.2% |
+| Stem/root variant | 95 | 19.6% |
+| All words present, not adjacent | 33 | 6.8% |
+| Most words present (>50%) | 5 | 1.0% |
+| One word present | 95 | 19.6% |
+| **Genuine absence** | **111** | **22.9%** |
+
+### Corrected finding: the indexer performs three operations
+
+1. **Direct extraction** (25.8%) — the exact term is on the page. The
+   author wrote "acorns" and Michelle indexed "acorns." String match.
+
+2. **Normalization** (30.7%) — a morphological variant is on the page.
+   The author wrote "grub" or "grubs" or "woodpecker's", Michelle
+   normalized to a canonical form. Includes plurals, possessives, stems,
+   and scattered-but-present words.
+
+3. **Extension + abstraction** (43.5%) — the term partially appears
+   (19.6% one word present) or doesn't appear at all (22.9% genuine
+   absence). Michelle read the page content and either:
+   - Extended a term to pages that discuss the concept without using the
+     exact word ("grubs" → 12 pages, but "grubs" only appears on 7)
+   - Named what the page discusses with a term she invented
+     ("description and coloration" → 13 pages, never appears on any)
+
+### What this means
+
+The NLP pipeline can handle Operation 1 (extraction) and partially
+handle Operation 2 (normalization via stemming/lemmatization).
+
+Operation 3 is the majority of the work (43.5% of pairs) and it's
+the operation we haven't been measuring correctly. This is where the
+indexer adds value — reading page content and asserting what it's ABOUT,
+not just what words it CONTAINS.
+
+### Notable: "body adaptations" → 19 pages, 0 exact matches
+
+The largest entry in the index is a pure abstraction. The term "body
+adaptations" never appears in the book. Michelle invented this label
+to organize 19 pages of content about woodpecker bills, feet, tails,
+and tongues. The author discussed these body parts individually; the
+indexer unified them under a concept the author never named.
+
+This is the most extreme example but it's the same pattern repeated
+at smaller scale across 34 entries (23% of all entries with pages).
+
+### Implication for charts
+
+In a patent claim chart, the equivalent of Operation 3 would be:
+the lawyer reads a passage of prior art and asserts it "teaches"
+a claim element, even though the claim language doesn't appear in
+the passage. The passage discusses the concept without using the
+patent's terminology. This is the core of claim construction — the
+human judgment that two different descriptions refer to the same thing.
+
 ## Open Questions
 
 1. Is the composition problem (atoms → molecules) approachable via
