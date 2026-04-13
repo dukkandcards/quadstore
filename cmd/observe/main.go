@@ -30,11 +30,17 @@ func main() {
 	termFilter := flag.String("term", "", "show only this term (substring match)")
 	limit := flag.Int("n", 10, "number of entries to show")
 	stats := flag.Bool("stats", false, "show input-output statistics only")
+	cluster := flag.Bool("cluster", false, "show page clusters")
 	flag.Parse()
 
 	if *dbPath == "" || *wsPath == "" {
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	if *cluster {
+		clusterPages(*wsPath)
+		return
 	}
 
 	if *stats {
