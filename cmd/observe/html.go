@@ -247,10 +247,24 @@ func generateClusterHTML(wsPath, outPath string) {
 		clusterData = append(clusterData, hc)
 	}
 
+	// Build pairwise similarity matrix for client-side splitting.
+	// Key: "pageA:pageB" (lower num first), Value: cosine similarity.
+	simMatrix := map[string]float64{}
+	for i := 0; i < len(rawPages); i++ {
+		for j := i + 1; j < len(rawPages); j++ {
+			sim := cosine(rawPages[i].vec, rawPages[j].vec, rawPages[i].norm, rawPages[j].norm)
+			if sim > 0.05 { // only store non-trivial similarities to keep size down
+				key := fmt.Sprintf("%d:%d", rawPages[i].num, rawPages[j].num)
+				simMatrix[key] = math.Round(sim*1000) / 1000
+			}
+		}
+	}
+	simJSON, _ := json.Marshal(simMatrix)
+
 	// Serialize cluster data for embedding in HTML.
 	jsonData, _ := json.Marshal(clusterData)
 
-	html := buildHTML(string(jsonData), len(rawPages), len(clusterData))
+	html := buildHTML(string(jsonData), string(simJSON), len(rawPages), len(clusterData))
 
 	os.WriteFile(outPath, []byte(html), 0644)
 	fmt.Printf("Done. Open %s in a browser.\n", outPath)
@@ -307,7 +321,7 @@ func cleanSnippet(text string, maxLen int) string {
 	return result
 }
 
-func buildHTML(jsonData string, totalPages, totalClusters int) string {
+func buildHTML(jsonData, simJSON string, totalPages, totalClusters int) string {
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -363,10 +377,13 @@ h1 { font-size: 1.4em; margin-bottom: 4px; }
 
 <script>
 let data = %s;
+const simMatrix = %s;
 let nextId = data.length ? Math.max(...data.map(c=>c.id)) + 1 : 1;
 
-// Each page carries its TF-IDF top words for client-side similarity.
-// We compute cosine similarity using the top words as a sparse vector proxy.
+function getSim(a, b) {
+  const lo = Math.min(a, b), hi = Math.max(a, b);
+  return simMatrix[lo + ':' + hi] || 0;
+}
 
 function render() {
   const container = document.getElementById('clusters');
@@ -421,54 +438,61 @@ function render() {
 
 function splitCluster(idx) {
   const cl = data[idx];
-  if (cl.pages.length < 2) return;
+  if (cl.pages.length < 4) {
+    alert('Too few pages to split meaningfully (need at least 4).');
+    return;
+  }
 
-  // Compute pairwise similarity using top words (Jaccard on word sets).
   const pages = cl.pages;
   const n = pages.length;
+  const nums = pages.map(p => p.num);
 
-  function wordSet(p) {
-    const s = new Set();
-    (p.top || []).forEach(w => s.add(w));
-    return s;
+  // Find the two most dissimilar pages as seeds.
+  let minSim = 1, seedA = 0, seedB = 1;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const sim = getSim(nums[i], nums[j]);
+      if (sim < minSim) { minSim = sim; seedA = i; seedB = j; }
+    }
   }
 
-  function jaccard(a, b) {
-    let intersection = 0, union = 0;
-    const all = new Set([...a, ...b]);
-    all.forEach(w => {
-      union++;
-      if (a.has(w) && b.has(w)) intersection++;
-    });
-    return union > 0 ? intersection / union : 0;
-  }
-
-  // Find the best split: try removing each page and see which split
-  // maximizes within-group similarity. Simple approach: k-means with k=2
-  // using Jaccard distance on top words.
-
-  // Initialize: first page in group A, find most different page for group B.
-  const sets = pages.map(p => wordSet(p));
-  let minSim = 1, seedB = 1;
-  for (let i = 1; i < n; i++) {
-    const sim = jaccard(sets[0], sets[i]);
-    if (sim < minSim) { minSim = sim; seedB = i; }
-  }
-
-  // Assign each page to nearest seed.
+  // Assign each page to nearest seed using real cosine similarity.
   const groupA = [], groupB = [];
   for (let i = 0; i < n; i++) {
-    const simA = jaccard(sets[i], sets[0]);
-    const simB = jaccard(sets[i], sets[seedB]);
+    const simA = getSim(nums[i], nums[seedA]);
+    const simB = getSim(nums[i], nums[seedB]);
     if (simA >= simB) groupA.push(pages[i]);
     else groupB.push(pages[i]);
   }
 
-  // If one group is empty, force at least one page into it.
-  if (groupA.length === 0) { groupA.push(groupB.pop()); }
-  if (groupB.length === 0) { groupB.push(groupA.pop()); }
+  // Enforce minimum group size of 2.
+  while (groupA.length < 2 && groupB.length > 2) {
+    // Move the page most similar to groupA's seed from B to A.
+    let bestIdx = 0, bestSim = -1;
+    for (let i = 0; i < groupB.length; i++) {
+      const sim = getSim(groupB[i].num, nums[seedA]);
+      if (sim > bestSim) { bestSim = sim; bestIdx = i; }
+    }
+    groupA.push(groupB.splice(bestIdx, 1)[0]);
+  }
+  while (groupB.length < 2 && groupA.length > 2) {
+    let bestIdx = 0, bestSim = -1;
+    for (let i = 0; i < groupA.length; i++) {
+      const sim = getSim(groupA[i].num, nums[seedB]);
+      if (sim > bestSim) { bestSim = sim; bestIdx = i; }
+    }
+    groupB.push(groupA.splice(bestIdx, 1)[0]);
+  }
 
-  // Compute shared words for each new group.
+  if (groupA.length < 2 || groupB.length < 2) {
+    alert('Pages are too similar to split further.');
+    return;
+  }
+
+  // Sort by page number.
+  groupA.sort((a, b) => a.num - b.num);
+  groupB.sort((a, b) => a.num - b.num);
+
   function computeShared(group) {
     const counts = {};
     group.forEach(p => (p.top || []).forEach(w => { counts[w] = (counts[w]||0) + 1; }));
@@ -488,7 +512,6 @@ function splitCluster(idx) {
     name: '', depth: depth, parentId: parentId
   };
 
-  // Replace the original cluster with the two new ones.
   data.splice(idx, 1, newA, newB);
   render();
 }
