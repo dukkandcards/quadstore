@@ -213,10 +213,7 @@ func generateClusterHTML(wsPath, outPath string) {
 		for _, pn := range ce.pages {
 			for _, p := range rawPages {
 				if p.num == pn {
-					snippet := strings.TrimSpace(p.text)
-					if len(snippet) > 300 {
-						snippet = snippet[:300] + "..."
-					}
+					snippet := cleanSnippet(p.text, 400)
 					hc.Pages = append(hc.Pages, htmlPage{
 						Num:     pn,
 						Chapter: p.chapter,
@@ -236,10 +233,7 @@ func generateClusterHTML(wsPath, outPath string) {
 		for _, pn := range singletons {
 			for _, p := range rawPages {
 				if p.num == pn {
-					snippet := strings.TrimSpace(p.text)
-					if len(snippet) > 300 {
-						snippet = snippet[:300] + "..."
-					}
+					snippet := cleanSnippet(p.text, 400)
 					hc.Pages = append(hc.Pages, htmlPage{
 						Num:     pn,
 						Chapter: p.chapter,
@@ -262,6 +256,57 @@ func generateClusterHTML(wsPath, outPath string) {
 	fmt.Printf("Done. Open %s in a browser.\n", outPath)
 }
 
+// cleanSnippet collapses PDF line breaks into flowing prose.
+// Preserves paragraph breaks (double newlines) but joins single
+// line breaks that are just print-layout artifacts.
+func cleanSnippet(text string, maxLen int) string {
+	// Normalize line endings.
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\f", "")
+
+	// Split on double newlines to preserve paragraph breaks.
+	paragraphs := strings.Split(text, "\n\n")
+	var cleaned []string
+	for _, para := range paragraphs {
+		para = strings.TrimSpace(para)
+		if para == "" {
+			continue
+		}
+		// Within a paragraph, collapse single newlines to spaces.
+		lines := strings.Split(para, "\n")
+		var joinedLines []string
+		for _, l := range lines {
+			l = strings.TrimSpace(l)
+			if l == "" {
+				continue
+			}
+			// Skip page number artifacts.
+			if len(l) < 6 {
+				trimmed := strings.Trim(l, "- \t")
+				isNum := true
+				for _, c := range trimmed {
+					if c < '0' || c > '9' {
+						isNum = false
+						break
+					}
+				}
+				if isNum && len(trimmed) > 0 {
+					continue
+				}
+			}
+			joinedLines = append(joinedLines, l)
+		}
+		if len(joinedLines) > 0 {
+			cleaned = append(cleaned, strings.Join(joinedLines, " "))
+		}
+	}
+	result := strings.Join(cleaned, "\n\n")
+	if maxLen > 0 && len(result) > maxLen {
+		result = result[:maxLen] + "..."
+	}
+	return result
+}
+
 func buildHTML(jsonData string, totalPages, totalClusters int) string {
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
@@ -274,7 +319,8 @@ func buildHTML(jsonData string, totalPages, totalClusters int) string {
 body { font-family: Georgia, 'Times New Roman', serif; background: #f5f3ef; color: #2c2c2c; padding: 20px; max-width: 900px; margin: 0 auto; }
 h1 { font-size: 1.4em; margin-bottom: 4px; }
 .subtitle { color: #666; font-size: 0.9em; margin-bottom: 20px; }
-.cluster { background: #fff; border: 1px solid #d4d0c8; border-radius: 6px; margin-bottom: 16px; padding: 16px; }
+.cluster { background: #fff; border: 1px solid #d4d0c8; border-radius: 6px; margin-bottom: 16px; padding: 16px; transition: all 0.2s; }
+.cluster.sub { border-left: 3px solid #8b7355; margin-left: 20px; }
 .cluster-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
 .cluster-num { font-size: 0.8em; color: #999; text-transform: uppercase; letter-spacing: 0.05em; }
 .cluster-pages { font-size: 0.85em; color: #666; }
@@ -288,48 +334,58 @@ h1 { font-size: 1.4em; margin-bottom: 4px; }
 .page-num { font-weight: bold; font-size: 0.9em; }
 .page-chapter { font-size: 0.8em; color: #888; }
 .page-top { font-size: 0.8em; color: #8b7355; margin-top: 2px; }
-.page-text { display: none; margin-top: 8px; padding: 10px; background: #faf9f6; border-radius: 4px; font-size: 0.85em; line-height: 1.5; white-space: pre-wrap; color: #444; max-height: 200px; overflow-y: auto; }
+.page-text { display: none; margin-top: 8px; padding: 10px; background: #faf9f6; border-radius: 4px; font-size: 0.85em; line-height: 1.6; color: #444; max-height: 250px; overflow-y: auto; }
 .page-text.open { display: block; }
 .toggle { color: #999; font-size: 0.8em; }
-.actions { margin-top: 16px; display: flex; gap: 8px; }
-.btn { padding: 6px 14px; border: 1px solid #d4d0c8; border-radius: 4px; background: #fff; cursor: pointer; font-family: Georgia, serif; font-size: 0.85em; color: #555; }
+.cluster-actions { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+.btn { padding: 5px 12px; border: 1px solid #d4d0c8; border-radius: 4px; background: #fff; cursor: pointer; font-family: Georgia, serif; font-size: 0.8em; color: #555; }
 .btn:hover { background: #f0ebe0; border-color: #8b7355; }
+.btn:disabled { opacity: 0.4; cursor: default; }
 .btn-save { background: #8b7355; color: #fff; border-color: #8b7355; }
 .btn-save:hover { background: #7a6348; }
 .saved-msg { display: none; color: #5a8a5a; font-size: 0.85em; margin-left: 10px; align-self: center; }
 .stats { font-size: 0.85em; color: #888; margin-bottom: 20px; }
 .singleton { opacity: 0.7; }
+.depth-label { font-size: 0.75em; color: #b0a890; margin-left: 8px; }
 </style>
 </head>
 <body>
 <h1>Page Clusters</h1>
-<p class="subtitle">Groups of pages that share vocabulary. Name each group.</p>
-<p class="stats">%d pages, %d clusters</p>
+<p class="subtitle">Groups of pages that share vocabulary. Name each group, or split to refine.</p>
+<p class="stats" id="stats">%d pages, %d clusters</p>
 
 <div id="clusters"></div>
 
-<div class="actions" style="margin-top: 24px;">
+<div class="cluster-actions" style="margin-top: 24px;">
   <button class="btn btn-save" onclick="exportJSON()">Export Named Clusters</button>
   <span class="saved-msg" id="exportMsg">Saved!</span>
 </div>
 
 <script>
-const data = %s;
+let data = %s;
+let nextId = data.length ? Math.max(...data.map(c=>c.id)) + 1 : 1;
+
+// Each page carries its TF-IDF top words for client-side similarity.
+// We compute cosine similarity using the top words as a sparse vector proxy.
 
 function render() {
   const container = document.getElementById('clusters');
   container.innerHTML = '';
+  document.getElementById('stats').textContent =
+    countAllPages() + ' pages, ' + data.length + ' clusters';
 
   data.forEach((cl, idx) => {
     const isSingleton = cl.name === 'Unclustered Pages';
+    const depth = cl.depth || 0;
     const div = document.createElement('div');
-    div.className = 'cluster' + (isSingleton ? ' singleton' : '');
+    div.className = 'cluster' + (isSingleton ? ' singleton' : '') + (depth > 0 ? ' sub' : '');
 
     const pageRange = formatPages(cl.pages.map(p => p.num));
+    const depthLabel = depth > 0 ? '<span class="depth-label">split from cluster ' + (cl.parentId||'?') + '</span>' : '';
 
     div.innerHTML = ''
       + '<div class="cluster-header">'
-      + '  <span class="cluster-num">Cluster ' + cl.id + '</span>'
+      + '  <span class="cluster-num">Cluster ' + cl.id + depthLabel + '</span>'
       + '  <span class="cluster-pages">' + cl.pages.length + ' pages: ' + pageRange + '</span>'
       + '</div>'
       + (isSingleton
@@ -353,9 +409,88 @@ function render() {
         + '  <div class="page-text">' + esc(p.text) + '</div>'
         + '</div>'
       ).join('')
+      + (!isSingleton && cl.pages.length >= 2
+        ? '<div class="cluster-actions">'
+          + '<button class="btn" onclick="splitCluster(' + idx + ')">Split this group</button>'
+          + '</div>'
+        : '')
     ;
     container.appendChild(div);
   });
+}
+
+function splitCluster(idx) {
+  const cl = data[idx];
+  if (cl.pages.length < 2) return;
+
+  // Compute pairwise similarity using top words (Jaccard on word sets).
+  const pages = cl.pages;
+  const n = pages.length;
+
+  function wordSet(p) {
+    const s = new Set();
+    (p.top || []).forEach(w => s.add(w));
+    return s;
+  }
+
+  function jaccard(a, b) {
+    let intersection = 0, union = 0;
+    const all = new Set([...a, ...b]);
+    all.forEach(w => {
+      union++;
+      if (a.has(w) && b.has(w)) intersection++;
+    });
+    return union > 0 ? intersection / union : 0;
+  }
+
+  // Find the best split: try removing each page and see which split
+  // maximizes within-group similarity. Simple approach: k-means with k=2
+  // using Jaccard distance on top words.
+
+  // Initialize: first page in group A, find most different page for group B.
+  const sets = pages.map(p => wordSet(p));
+  let minSim = 1, seedB = 1;
+  for (let i = 1; i < n; i++) {
+    const sim = jaccard(sets[0], sets[i]);
+    if (sim < minSim) { minSim = sim; seedB = i; }
+  }
+
+  // Assign each page to nearest seed.
+  const groupA = [], groupB = [];
+  for (let i = 0; i < n; i++) {
+    const simA = jaccard(sets[i], sets[0]);
+    const simB = jaccard(sets[i], sets[seedB]);
+    if (simA >= simB) groupA.push(pages[i]);
+    else groupB.push(pages[i]);
+  }
+
+  // If one group is empty, force at least one page into it.
+  if (groupA.length === 0) { groupA.push(groupB.pop()); }
+  if (groupB.length === 0) { groupB.push(groupA.pop()); }
+
+  // Compute shared words for each new group.
+  function computeShared(group) {
+    const counts = {};
+    group.forEach(p => (p.top || []).forEach(w => { counts[w] = (counts[w]||0) + 1; }));
+    const thresh = Math.max(2, Math.floor(group.length / 2));
+    return Object.keys(counts).filter(w => counts[w] >= thresh).sort();
+  }
+
+  const parentId = cl.id;
+  const depth = (cl.depth || 0) + 1;
+
+  const newA = {
+    id: nextId++, pages: groupA, shared: computeShared(groupA),
+    name: '', depth: depth, parentId: parentId
+  };
+  const newB = {
+    id: nextId++, pages: groupB, shared: computeShared(groupB),
+    name: '', depth: depth, parentId: parentId
+  };
+
+  // Replace the original cluster with the two new ones.
+  data.splice(idx, 1, newA, newB);
+  render();
 }
 
 function togglePage(header) {
@@ -363,6 +498,12 @@ function togglePage(header) {
   const toggle = header.querySelector('.toggle');
   text.classList.toggle('open');
   toggle.textContent = text.classList.contains('open') ? 'collapse' : 'expand';
+}
+
+function countAllPages() {
+  const seen = new Set();
+  data.forEach(c => c.pages.forEach(p => seen.add(p.num)));
+  return seen.size;
 }
 
 function formatPages(nums) {
@@ -385,12 +526,14 @@ function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 function escapeAttr(s) { return esc(s).replace(/"/g,'&quot;'); }
 
 function exportJSON() {
-  const named = data.filter(c => c.name).map(c => ({
-    name: c.name,
+  const result = data.filter(c => c.name || c.pages.length).map(c => ({
+    name: c.name || '(unnamed)',
     pages: c.pages.map(p => p.num),
-    shared: c.shared
+    shared: c.shared,
+    depth: c.depth || 0,
+    parentId: c.parentId || null
   }));
-  const blob = new Blob([JSON.stringify(named, null, 2)], {type: 'application/json'});
+  const blob = new Blob([JSON.stringify(result, null, 2)], {type: 'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'clusters.json';
