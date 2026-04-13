@@ -293,7 +293,7 @@ func computeSignals(s *quadstore.Store, label string) {
 }
 
 func printSignalObservations(s *quadstore.Store, entries map[string]*signalEntry, signalLabel, dataLabel string) {
-	fmt.Println("=== OBSERVATIONS ===\n")
+	fmt.Println("=== OBSERVATIONS ===")
 
 	// Helper to read a signal value.
 	readSignal := func(id, pred string) string {
@@ -319,7 +319,7 @@ func printSignalObservations(s *quadstore.Store, entries map[string]*signalEntry
 	// the machine doesn't know about.
 	fmt.Println("--- High page overlap (>= 0.80) ---")
 	fmt.Println("These entries' pages are almost entirely contained in another entry's pages.")
-	fmt.Println("Observation: one might be a redirect or sub-entry of the other.\n")
+	fmt.Println("Observation: one might be a redirect or sub-entry of the other.")
 
 	type overlapEntry struct {
 		term, overlapsWith string
@@ -352,7 +352,7 @@ func printSignalObservations(s *quadstore.Store, entries map[string]*signalEntry
 	// sitting in hot neighborhoods but barely contributing.
 	fmt.Println("\n--- High page co-density, few own pages ---")
 	fmt.Println("These entries point to busy pages but contribute few references.")
-	fmt.Println("Observation: possibly noise, or a concept the book touches without dwelling on.\n")
+	fmt.Println("Observation: possibly noise, or a concept the book touches without dwelling on.")
 
 	type densityEntry struct {
 		term    string
@@ -377,7 +377,7 @@ func printSignalObservations(s *quadstore.Store, entries map[string]*signalEntry
 
 	// Observation 3: Entries with orphan pages — sole gateway to content.
 	fmt.Println("\n--- Entries with orphan pages (sole reference to a page) ---")
-	fmt.Println("If you remove this entry, those pages become unreachable from the index.\n")
+	fmt.Println("If you remove this entry, those pages become unreachable from the index.")
 
 	type orphanEntry struct {
 		term        string
@@ -403,7 +403,7 @@ func printSignalObservations(s *quadstore.Store, entries map[string]*signalEntry
 	// Observation 4: High term-subsumes-count — general terms that appear
 	// inside many specific terms. Natural funnel candidates.
 	fmt.Println("\n--- Terms that appear inside many other terms ---")
-	fmt.Println("Observation: general terms that could organize specific variants beneath them.\n")
+	fmt.Println("Observation: general terms that could organize specific variants beneath them.")
 
 	type subsumesEntry struct {
 		term  string
@@ -427,7 +427,7 @@ func printSignalObservations(s *quadstore.Store, entries map[string]*signalEntry
 
 	// Observation 5: Widest page spread — recurring themes vs focused discussions.
 	fmt.Println("\n--- Widest page spread (recurring themes) ---")
-	fmt.Println("Observation: terms that span the whole book are likely major themes.\n")
+	fmt.Println("Observation: terms that span the whole book are likely major themes.")
 
 	type spreadEntry struct {
 		term   string
@@ -452,7 +452,7 @@ func printSignalObservations(s *quadstore.Store, entries map[string]*signalEntry
 
 	// Observation 6: Composite view — entries with multiple strong signals.
 	fmt.Println("\n--- Multi-signal entries (3+ signals firing) ---")
-	fmt.Println("These entries light up on multiple dimensions. Worth looking at.\n")
+	fmt.Println("These entries light up on multiple dimensions. Worth looking at.")
 
 	type multiSignal struct {
 		term    string

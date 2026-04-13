@@ -257,7 +257,7 @@ func computeWeightedEdges(s *quadstore.Store, label string) {
 	}
 
 	fmt.Println("--- Highest total contextual weight (sum across all pages) ---")
-	fmt.Println("Entries whose page references are collectively most informative.\n")
+	fmt.Println("Entries whose page references are collectively most informative.")
 	sort.Slice(summaries, func(i, j int) bool { return summaries[i].sum > summaries[j].sum })
 	limit := 25
 	if len(summaries) < limit {
@@ -271,7 +271,7 @@ func computeWeightedEdges(s *quadstore.Store, label string) {
 	}
 
 	fmt.Println("\n--- Highest average contextual weight (per page reference) ---")
-	fmt.Println("Entries where each individual page reference is most meaningful.\n")
+	fmt.Println("Entries where each individual page reference is most meaningful.")
 	sort.Slice(summaries, func(i, j int) bool { return summaries[i].avg > summaries[j].avg })
 	fmt.Printf("  %-35s  %8s  %8s  %5s  %6s\n", "Term", "Avg", "Sum", "Pages", "IDF")
 	fmt.Printf("  %-35s  %8s  %8s  %5s  %6s\n", "----", "---", "---", "-----", "---")
@@ -282,7 +282,7 @@ func computeWeightedEdges(s *quadstore.Store, label string) {
 
 	// Lowest weighted entries (most noise).
 	fmt.Println("\n--- Lowest total contextual weight (most noise-like) ---")
-	fmt.Println("Entries whose page references carry the least contextual information.\n")
+	fmt.Println("Entries whose page references carry the least contextual information.")
 	sort.Slice(summaries, func(i, j int) bool { return summaries[i].sum < summaries[j].sum })
 	limit = 20
 	if len(summaries) < limit {
@@ -306,7 +306,7 @@ func weightedGreedyReduce(s *quadstore.Store, entries map[string]*weightedEntry,
 	entryWeights map[string][]float64, pageEntries map[string][]string, label string) {
 
 	fmt.Println("\n--- Weighted greedy reduction ---")
-	fmt.Println("Selecting entries by weighted marginal coverage.\n")
+	fmt.Println("Selecting entries by weighted marginal coverage.")
 
 	// Build per-entry per-page weight lookup.
 	type pageWeight struct {

@@ -26,7 +26,7 @@ import (
 // user vocabulary. That's the part the machine can't do.
 func subtractToIndex(s *quadstore.Store) {
 	fmt.Println("\n=== SUBTRACTION PIPELINE ===")
-	fmt.Println("Starting with all generated entries. Removing what doesn't belong.\n")
+	fmt.Println("Starting with all generated entries. Removing what doesn't belong.")
 
 	// Collect human terms for comparison.
 	humanTerms := map[string]bool{}

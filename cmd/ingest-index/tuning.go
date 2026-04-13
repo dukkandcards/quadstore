@@ -14,7 +14,7 @@ import (
 // and stored as quads — this function reads them and recombines.
 func tuneFormulas(s *quadstore.Store) {
 	fmt.Println("\n=== FORMULA TUNING ===")
-	fmt.Println("Trying multiple combinations of signals against human reference.\n")
+	fmt.Println("Trying multiple combinations of signals against human reference.")
 
 	// Collect human terms.
 	humanTerms := map[string]bool{}

@@ -228,11 +228,11 @@ func analyzeContentions(s *quadstore.Store, label string, mode contentionMode) {
 	if mode == modeIndex {
 		sort.Slice(scores, func(i, j int) bool { return scores[i].indexValue > scores[j].indexValue })
 		fmt.Println("--- Highest INDEX value (exclusive, discriminating, not redundant) ---")
-		fmt.Println("These entries make unique assertions the index needs.\n")
+		fmt.Println("These entries make unique assertions the index needs.")
 	} else {
 		sort.Slice(scores, func(i, j int) bool { return scores[i].chartValue > scores[j].chartValue })
 		fmt.Println("--- Highest CHART value (redundant, thorough, agreed-upon) ---")
-		fmt.Println("These assertions are well-supported by multiple sources.\n")
+		fmt.Println("These assertions are well-supported by multiple sources.")
 	}
 
 	fmt.Printf("  %-35s  %6s  %6s  %6s  %6s  %6s  %6s\n",
@@ -258,11 +258,11 @@ func analyzeContentions(s *quadstore.Store, label string, mode contentionMode) {
 	if mode == modeIndex {
 		sort.Slice(scores, func(i, j int) bool { return scores[i].indexValue < scores[j].indexValue })
 		fmt.Println("--- Lowest INDEX value (fully redundant, background) ---")
-		fmt.Println("Every assertion this entry makes is also made by many others.\n")
+		fmt.Println("Every assertion this entry makes is also made by many others.")
 	} else {
 		sort.Slice(scores, func(i, j int) bool { return scores[i].chartValue < scores[j].chartValue })
 		fmt.Println("--- Lowest CHART value (exclusive, unsupported) ---")
-		fmt.Println("These assertions lack corroboration — exposure risk.\n")
+		fmt.Println("These assertions lack corroboration — exposure risk.")
 	}
 
 	fmt.Printf("  %-35s  %6s  %6s  %6s  %6s  %6s  %6s\n",

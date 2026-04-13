@@ -302,7 +302,7 @@ func computeAboutness(s *quadstore.Store, label string, pages map[int]*pageConte
 	// --- Observations ---
 
 	// Top entries by average aboutness.
-	fmt.Println("--- Highest average aboutness (term is ABOUT these pages) ---\n")
+	fmt.Println("--- Highest average aboutness (term is ABOUT these pages) ---")
 
 	type aggDisplay struct {
 		term        string
@@ -330,7 +330,7 @@ func computeAboutness(s *quadstore.Store, label string, pages map[int]*pageConte
 	}
 
 	// Lowest aboutness (mentioned but not about).
-	fmt.Println("\n--- Lowest average aboutness (mentioned but pages aren't ABOUT this) ---\n")
+	fmt.Println("\n--- Lowest average aboutness (mentioned but pages aren't ABOUT this) ---")
 	sort.Slice(aggs, func(i, j int) bool { return aggs[i].avg < aggs[j].avg })
 	limit = 20
 	if len(aggs) < limit {
@@ -344,7 +344,7 @@ func computeAboutness(s *quadstore.Store, label string, pages map[int]*pageConte
 	// Combined: abstraction level + aboutness.
 	if label == "generated" {
 		fmt.Println("\n--- Combined: Abstraction level × Aboutness (the full signal) ---")
-		fmt.Println("Molecule-level terms that pages are actually ABOUT.\n")
+		fmt.Println("Molecule-level terms that pages are actually ABOUT.")
 
 		humanTerms := map[string]bool{}
 		hit := s.Match("", "term", "", "reference")

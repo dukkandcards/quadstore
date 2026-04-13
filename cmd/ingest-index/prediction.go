@@ -76,7 +76,7 @@ func computePredictionError(s *quadstore.Store, label string) {
 	// treat in a certain context — the clicker has high discriminative power.
 	fmt.Println("--- Discriminative power ---")
 	fmt.Println("What fraction of this entry's pages are only reachable through it?")
-	fmt.Println("High = sole gateway to content. Low = redundant path.\n")
+	fmt.Println("High = sole gateway to content. Low = redundant path.")
 
 	type discEntry struct {
 		term          string
@@ -123,7 +123,7 @@ func computePredictionError(s *quadstore.Store, label string) {
 	// page prediction. It may still add routing value (different search term).
 	fmt.Println("\n--- Prediction redundancy (blocking) ---")
 	fmt.Println("How well do other entries already predict this entry's pages?")
-	fmt.Println("High = fully blocked (content is reachable without this entry).\n")
+	fmt.Println("High = fully blocked (content is reachable without this entry).")
 
 	type blockEntry struct {
 		term           string
@@ -200,7 +200,7 @@ func computePredictionError(s *quadstore.Store, label string) {
 	// expressed as different search terms.
 	fmt.Println("\n--- Stimulus generalization (same destination, different terms) ---")
 	fmt.Println("Entry clusters that reach nearly identical page sets.")
-	fmt.Println("These are the same 'command' in different words.\n")
+	fmt.Println("These are the same 'command' in different words.")
 
 	type entryPair struct {
 		termA, termB string
@@ -265,7 +265,7 @@ func computePredictionError(s *quadstore.Store, label string) {
 	// not content destinations.
 	fmt.Println("\n--- Marker signal candidates ---")
 	fmt.Println("Entries that navigate rather than contain.")
-	fmt.Println("Few own pages, but high structural connectivity.\n")
+	fmt.Println("Few own pages, but high structural connectivity.")
 
 	type markerEntry struct {
 		term      string

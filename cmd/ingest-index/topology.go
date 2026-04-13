@@ -9,7 +9,7 @@ import (
 )
 
 func compareTopology(s *quadstore.Store) {
-	fmt.Println("=== TOPOLOGY DIFF: Human vs Machine ===\n")
+	fmt.Println("=== TOPOLOGY DIFF: Human vs Machine ===")
 
 	// --- Role distribution comparison ---
 	refRoles := classifyRoles(s, "reference")

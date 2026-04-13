@@ -18,7 +18,7 @@ import (
 // contribution — and compares that ranking to what the human actually chose.
 func greedyReduce(s *quadstore.Store, label string) {
 	fmt.Printf("\n=== GREEDY NOISE REDUCTION (label: %s) ===\n", label)
-	fmt.Println("Selecting entries by marginal page coverage (prediction error).\n")
+	fmt.Println("Selecting entries by marginal page coverage (prediction error).")
 
 	// Gather entries and pages.
 	type greedyEntry struct {

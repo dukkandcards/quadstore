@@ -196,7 +196,7 @@ func computeBackgroundRate(s *quadstore.Store, label string) {
 	// Most background-like (noise for an index, signal for a chart).
 	fmt.Println("--- Most background-like (uniform, high coverage) ---")
 	fmt.Println("For INDEX: these are noise — penalize them.")
-	fmt.Println("For CHART: these would be defensive repetition — investigate WHY.\n")
+	fmt.Println("For CHART: these would be defensive repetition — investigate WHY.")
 	sort.Slice(results, func(i, j int) bool { return results[i].backgroundness > results[j].backgroundness })
 	fmt.Printf("  %-35s  %6s  %7s  %7s  %5s  %5s\n",
 		"Term", "Cover", "Cluster", "GapVar", "Run", "Bg")
@@ -214,7 +214,7 @@ func computeBackgroundRate(s *quadstore.Store, label string) {
 
 	// Most foreground-like (signal for an index).
 	fmt.Println("\n--- Most foreground-like (clustered, low coverage) ---")
-	fmt.Println("For INDEX: these are signal — the book discusses them in specific places.\n")
+	fmt.Println("For INDEX: these are signal — the book discusses them in specific places.")
 	sort.Slice(results, func(i, j int) bool { return results[i].foregroundness > results[j].foregroundness })
 	fmt.Printf("  %-35s  %6s  %7s  %7s  %5s  %5s\n",
 		"Term", "Cover", "Cluster", "GapVar", "Run", "Fg")
@@ -228,7 +228,7 @@ func computeBackgroundRate(s *quadstore.Store, label string) {
 
 	// Now: foreground-weighted greedy.
 	fmt.Println("\n--- Foreground-weighted greedy reduction ---")
-	fmt.Println("Selecting by marginal coverage × foregroundness.\n")
+	fmt.Println("Selecting by marginal coverage × foregroundness.")
 	foregroundGreedy(s, entries, results, label)
 }
 

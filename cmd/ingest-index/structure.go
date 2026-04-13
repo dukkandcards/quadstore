@@ -62,7 +62,7 @@ func analyzeInterEntryStructure(s *quadstore.Store, label string) {
 	// A composition chain is: term A contains term B, and both are entries.
 	// Length of chain = depth of human abstraction hierarchy.
 
-	fmt.Println("--- Composition chains (term A contains term B, both are entries) ---\n")
+	fmt.Println("--- Composition chains (term A contains term B, both are entries) ---")
 
 	type chain struct {
 		parent string
@@ -148,7 +148,7 @@ func analyzeInterEntryStructure(s *quadstore.Store, label string) {
 	// Machine indexes show it accidentally.
 
 	fmt.Println("\n--- Page-set nesting (A's pages ⊂ B's pages) ---")
-	fmt.Println("Deliberate nesting = human structure. Accidental = noise.\n")
+	fmt.Println("Deliberate nesting = human structure. Accidental = noise.")
 
 	type nestPair struct {
 		child, parent   string
@@ -214,7 +214,7 @@ func analyzeInterEntryStructure(s *quadstore.Store, label string) {
 	// Machine families are accidental vocabulary collisions.
 
 	fmt.Println("\n--- Word families (entries sharing a root word) ---")
-	fmt.Println("Human = intentional hierarchy. Machine = vocabulary collision.\n")
+	fmt.Println("Human = intentional hierarchy. Machine = vocabulary collision.")
 
 	// Find significant roots (words that appear in 3+ entry terms).
 	wordEntries := map[string][]string{} // word → entry terms
@@ -279,7 +279,7 @@ func analyzeInterEntryStructure(s *quadstore.Store, label string) {
 	// Measure: word count × page count × composition score.
 
 	fmt.Println("\n--- Abstraction level (the molecule zone) ---")
-	fmt.Println("Terms that are composed (not atoms) but not over-general.\n")
+	fmt.Println("Terms that are composed (not atoms) but not over-general.")
 
 	type abstraction struct {
 		term       string
