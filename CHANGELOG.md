@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-04-13 — Second Session: Clustering Breakthrough
+
+### Observe Tool (`cmd/observe/`)
+- Built `cmd/observe` for raw input-output analysis
+- `-stats` mode: counts term presence on pages (25.8% exact, 22.7% genuine absence)
+- `-cluster` mode: TF-IDF cosine page clustering (10 clusters from 72 pages)
+- `-html` mode: self-contained interactive HTML review page for indexer
+- Page range parser fix: en-dash ranges now properly expand (23–27 → 23,24,25,26,27)
+
+### HTML Cluster Review Page
+- Self-contained HTML, no dependencies, opens in any browser
+- Clusters shown as cards with shared vocabulary tags
+- Text input to name each cluster
+- Expandable page text (PDF line breaks collapsed to flowing prose)
+- Split button: divides cluster into 2 sub-groups using precomputed cosine similarity
+- Minimum 2 pages per side enforced
+- Export named clusters as JSON
+- Designed for professional indexer (Michelle) to review and name groups
+
+### Key Findings
+- Simple TF-IDF cosine clustering found every major section the indexer indexed
+- 22.7% of entry-page pairs are genuine absence (term never appears on page in any form)
+- The indexer performs 3 operations: extract (25.8%), normalize (30.7%), abstract (22.7%)
+- The tool's job: find the clusters. The indexer's job: name them.
+- Competing software is output formatting only — none do source text clustering
+
+### Research Correction
+- Stop modeling indexer's intent (why). Model the transformation (pages in, index out).
+- The simplest approach (page vocabulary clustering) outperformed all theory-driven signals.
+
 ## 2026-04-13 — Initial Research Session
 
 ### Quad Store Library (`quadstore.go`, `shape.go`)

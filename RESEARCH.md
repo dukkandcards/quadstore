@@ -336,6 +336,61 @@ the passage. The passage discusses the concept without using the
 patent's terminology. This is the core of claim construction — the
 human judgment that two different descriptions refer to the same thing.
 
+## Page Clustering (the breakthrough)
+
+After a full session of signal computation, formula tuning, and theory-driven
+approaches that peaked at 40% match rate, the simplest approach worked best.
+
+**Method:** TF-IDF cosine similarity on page word vectors, union-find
+clustering at 0.20 threshold. ~200 lines. Filters background words (>50%
+of pages) and rare words (<2 pages).
+
+**Result:** 10 clusters from 72 pages. Every major cluster maps directly
+to a group of Michelle's index entries:
+
+| Cluster | Pages | Shared vocabulary | Michelle's entries |
+|---|---|---|---|
+| 1 | 23-33 | acorn, bark, carpenter, food | food foraging, acorns, hoarding |
+| 2 | 4-6, 36, 50-55 | bill, tongue, long | body adaptations (tools) |
+| 3 | 1, 60-68 | american, black, white, barred | species identification, key |
+| 4 | 17-22 | sap, holes, bark, tree | sapsuckers, tree damage |
+| 5 | 43-49 | feather, tail, curve | tail, tail adaptations |
+| 6 | 38-41 | foot, toes, climbing | foot, foot adaptations |
+| 9 | 11-12 | young, feed, nest | raising young |
+
+17 pages are singletons (unclustered).
+
+**Key insight:** Don't try to name the clusters. Don't try to pick terms.
+Find page boundaries and present them with shared vocabulary. The indexer
+sees "11 pages share acorn/bark/carpenter/food" and names it instantly.
+The tool finds the cluster. The indexer names it.
+
+**Why this works better than everything else:**
+- No theory about why the indexer does things
+- No scoring formulas that dilute when combined
+- No subtraction thresholds that destroy routing structure
+- Just: which pages share vocabulary? Present the groups.
+
+### Interactive HTML review tool
+
+Built a self-contained HTML page (`cmd/observe/ -html`) for the indexer:
+
+1. **See** — clusters displayed as cards with shared vocabulary tags
+2. **Split** — click to divide any cluster into sub-groups (client-side,
+   uses precomputed cosine similarity matrix, enforces min 2 pages per side)
+3. **Name** — text input on each cluster card
+4. **Read** — expand any page to read the flowing prose text
+5. **Repeat** — keep splitting until granularity feels right
+6. **Export** — download named clusters as JSON
+
+The workflow models what indexers probably do: start with big groups, split
+until the granularity is right, name each group. The depth at which they
+stop splitting reveals the natural granularity of index entries.
+
+Competing indexing software is output formatting only (typesetting,
+alphabetization, page range formatting). None look at source text to find
+page clusters. This would be unique to mega-index.
+
 ## Open Questions
 
 1. Is the composition problem (atoms → molecules) approachable via

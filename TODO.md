@@ -1,18 +1,26 @@
 # Quad Store — TODO
 
-## Where to Start (2026-04-13)
+## Current State (2026-04-13, end of day)
 
-The research hit a wall at 40% human match rate. Every signal we added
-after the Rosch basic-level abstraction (2-word terms, 3-7 pages, middle
-of composition chain) made the result worse, not better. The subtraction
-pipeline confirmed that indexing IS subtraction, but the thresholds destroy
-the human's routing structure because we're theorizing about WHY the indexer
-makes decisions instead of observing the actual input-output transformation.
+Page clustering works. The HTML review tool is functional. Michelle
+can open it, see clusters, split them, name them, export.
 
-**Jay's correction**: Stop modeling the indexer's intent. Model the
-transformation. Pages went in, index came out. What function turns input
-into output? A bad thesis (the why) would produce a mismatched outcome
-(what is in the index). Follow the outcome, not the assumed reasoning.
+### Immediate (before next Michelle demo)
+- [ ] Get Michelle's feedback on the HTML review page
+- [ ] Refine cluster threshold if groups are too coarse or too fine
+- [ ] Consider: should the split produce 2 or allow 3+ sub-groups?
+- [ ] Consider: merge button (combine two clusters that are too granular)
+
+### Integration with mega-index
+- [ ] Add clustering as a pipeline step (after extract, before suggest)
+- [ ] Named clusters → parent index headings
+- [ ] NLP term extraction within each cluster → sub-entries
+- [ ] The existing suggest/review/render pipeline stays as-is
+
+### Research (parked, may revisit)
+The theory-driven approach peaked at 40% match with Rosch basic-level
+abstraction. Every added signal made it worse. The clustering approach
+bypassed this by not trying to name things — just finding groups.
 
 ### Next session should start here:
 
