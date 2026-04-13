@@ -1,0 +1,7 @@
+# Compiled binaries
+/ingest-index
+*.exe
+*.db
+
+# OS
+.DS_Store
