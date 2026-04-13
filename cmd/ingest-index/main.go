@@ -24,6 +24,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/dukkandcards/quadstore"
@@ -493,17 +494,39 @@ func entriesToQuads(entries []refEntry, label string) []quadstore.Quad {
 
 var pageNumRe = regexp.MustCompile(`\b(\d+)\b`)
 
+var rangeRe = regexp.MustCompile(`(\d+)\s*[–\-]\s*(\d+)`)
+
 func parsePageNumbers(raw string) []string {
-	matches := pageNumRe.FindAllString(raw, -1)
-	// Deduplicate.
 	seen := map[string]bool{}
 	var result []string
-	for _, m := range matches {
-		page := "page:" + m
-		if !seen[page] {
-			seen[page] = true
-			result = append(result, page)
+	addPage := func(n int) {
+		p := fmt.Sprintf("page:%d", n)
+		if !seen[p] {
+			seen[p] = true
+			result = append(result, p)
 		}
 	}
+
+	// First expand ranges (en-dash or hyphen).
+	expanded := rangeRe.ReplaceAllStringFunc(raw, func(m string) string {
+		parts := rangeRe.FindStringSubmatch(m)
+		if len(parts) == 3 {
+			start, _ := strconv.Atoi(parts[1])
+			end, _ := strconv.Atoi(parts[2])
+			for p := start; p <= end; p++ {
+				addPage(p)
+			}
+		}
+		return "" // remove from raw so plain numbers don't double-count
+	})
+
+	// Then extract remaining plain numbers.
+	for _, m := range pageNumRe.FindAllString(expanded, -1) {
+		n, _ := strconv.Atoi(m)
+		if n > 0 {
+			addPage(n)
+		}
+	}
+
 	return result
 }
