@@ -19,7 +19,7 @@ import (
 //   d) A text extraction artifact (bad OCR, encoding, truncation)
 func verifyMatching(store *quadstore.Store, wsPath string) {
 	fmt.Println("=== VERIFYING THE 46.6% NO-MATCH CLAIM ===")
-	fmt.Println("Digging into every 'no match' pair to see WHY.\n")
+	fmt.Print("Digging into every 'no match' pair to see WHY.\n\n")
 
 	// Load pages.
 	pages := map[int]string{}
@@ -251,7 +251,7 @@ func verifyMatching(store *quadstore.Store, wsPath string) {
 	// Show genuine absences.
 	if len(genuineAbsences) > 0 {
 		fmt.Printf("\n--- Genuine absences (%d pairs) ---\n", len(genuineAbsences))
-		fmt.Println("No form of the term appears on the page.\n")
+		fmt.Print("No form of the term appears on the page.\n\n")
 		sort.Strings(genuineAbsences)
 		limit := 40
 		if len(genuineAbsences) < limit {

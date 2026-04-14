@@ -189,7 +189,7 @@ func observeStats(store *quadstore.Store, wsPath string) {
 
 	// Show the "never" entries — these are the conceptual abstractions.
 	fmt.Println("\n--- Term NEVER appears on any of its pages ---")
-	fmt.Println("These are concepts the indexer named, not words the author wrote.\n")
+	fmt.Print("These are concepts the indexer named, not words the author wrote.\n\n")
 	sort.Slice(neverAppear, func(i, j int) bool { return neverAppear[i].totalPages > neverAppear[j].totalPages })
 	for _, ep := range neverAppear {
 		fmt.Printf("  %-35s  %d pages  [%s]\n", ep.term, ep.totalPages, ep.typ)
@@ -197,7 +197,7 @@ func observeStats(store *quadstore.Store, wsPath string) {
 
 	// Show the "always" entries — direct text extraction.
 	fmt.Println("\n--- Term ALWAYS appears on every page it references ---")
-	fmt.Println("These are words the author wrote, directly extracted.\n")
+	fmt.Print("These are words the author wrote, directly extracted.\n\n")
 	sort.Slice(alwaysAppear, func(i, j int) bool { return alwaysAppear[i].totalPages > alwaysAppear[j].totalPages })
 	limit := 25
 	if len(alwaysAppear) < limit {
@@ -211,7 +211,7 @@ func observeStats(store *quadstore.Store, wsPath string) {
 	// These are the most interesting: the indexer extends the term's
 	// coverage beyond where it literally appears.
 	fmt.Println("\n--- Term appears on SOME but not all of its pages ---")
-	fmt.Println("The indexer extends coverage beyond literal appearance.\n")
+	fmt.Print("The indexer extends coverage beyond literal appearance.\n\n")
 	sort.Slice(mixedAppear, func(i, j int) bool { return mixedAppear[i].totalPages > mixedAppear[j].totalPages })
 	limit = 25
 	if len(mixedAppear) < limit {
