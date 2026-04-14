@@ -58,9 +58,32 @@ go run ./cmd/ingest-index/ \
 
 ## Quad Store Library
 
-- [ ] Consider whether the library needs anything before other products use it
-- [ ] First real product integration (likely mega-index or LawDek)
-- [ ] Decide: does this stay standalone or merge into decklib?
+### Shipped 2026-04-13 (rigorous API for multi-product consumption)
+- [x] Reader / Writer separation with ctx, blocking semantics
+- [x] Batch type (Adds / Removes / Label default / Metadata map)
+- [x] `iter.Seq2[Quad, error]` streaming reads via Reader.Find
+- [x] commits + commit_ops journal tables (schema v2)
+- [x] UUIDv7 commit IDs (time-sortable)
+- [x] Enforced label namespace on Writer.Commit: source:/derived:/human:/meta:
+- [x] Legacy Add/AddBatch/Delete remain permissive (no breaking change)
+- [x] meta table for schema_version (does NOT pollute quads view)
+- [x] Migration v1→v2 idempotent; downgrade refused
+- [x] Writer error semantics: failed Commit rolls back, Writer usable for retry
+- [x] Writer slot = single per Store (Rung 1 of concurrent-writer ladder)
+- [x] Full test coverage for new surface (25 tests total passing)
+
+### Decided, documented in memory
+- Standalone module ✓ (decklib thin wrapper deferred until 2nd non-PubDek consumer)
+- External DB candidates ruled out (we're writing our own)
+- Concurrent-writer evolution ladder (Rungs 1-5, no named Rung 6)
+
+### Next
+- [ ] mega-index migration: update label writes (`reference` → `source:reference`;
+      `generated` → `derived:generated`; `signal/*` → `derived:signal-*`; etc.)
+      Do opportunistically when mega-index is next edited.
+- [ ] First real product integration via new API (LawDek is the likely
+      catalyst — matter/event/conjunction writes)
+- [ ] When LawDek imports: revisit decklib thin wrapper design
 
 ## Future Analysis
 

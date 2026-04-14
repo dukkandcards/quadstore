@@ -1,6 +1,19 @@
 // Package quadstore is a minimal quad store backed by SQLite.
 // Cayley-inspired first principles: subject-predicate-object-label,
 // schema-on-read, one file per product, path-based traversal.
+//
+// Label namespace for quads written via Writer.Commit (enforced):
+//
+//	source:*   raw ingest (source:msgraph, source:psa-api, source:book-ocr)
+//	derived:*  computed signals (derived:cluster, derived:contention, derived:tfidf)
+//	human:*    attention / decision triples (human:selected, human:overridden)
+//	meta:*     provenance and schema (meta:schema-version)
+//
+// Legacy write methods (Add, AddBatch, Delete) are permissive — they
+// accept any label string, including pre-namespace labels ("reference",
+// "generated") used by existing corpora. New callers should use
+// Writer.Commit; legacy callers can migrate at their own pace. Migration
+// mapping: reference → source:reference; generated → derived:generated.
 package quadstore
 
 import (
@@ -25,42 +38,31 @@ func (q Quad) valid() bool {
 
 // Store is one SQLite file — one product's data.
 type Store struct {
-	db *sql.DB
+	db         *sql.DB
+	writerSlot chan struct{} // Rung 1: single-writer queue, capacity 1
 }
 
-// Open creates or opens a quad store at path.
+// Open creates or opens a quad store at path. Applies schema migrations
+// up to the current version; fails loudly if the on-disk schema is newer
+// than the library (downgrade refused).
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("quadstore: open %s: %w", path, err)
 	}
-	if err := createSchema(db); err != nil {
+	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{
+		db:         db,
+		writerSlot: make(chan struct{}, 1),
+	}, nil
 }
 
 // Close closes the store.
 func (s *Store) Close() error {
 	return s.db.Close()
-}
-
-func createSchema(db *sql.DB) error {
-	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS quads (
-			subject   TEXT NOT NULL,
-			predicate TEXT NOT NULL,
-			object    TEXT NOT NULL,
-			label     TEXT NOT NULL DEFAULT '',
-			UNIQUE(subject, predicate, object, label)
-		);
-		CREATE INDEX IF NOT EXISTS idx_spo ON quads(subject, predicate, object);
-		CREATE INDEX IF NOT EXISTS idx_pos ON quads(predicate, object, subject);
-		CREATE INDEX IF NOT EXISTS idx_osp ON quads(object, subject, predicate);
-		CREATE INDEX IF NOT EXISTS idx_lsp ON quads(label, subject, predicate);
-	`)
-	return err
 }
 
 // Add inserts a single quad. Duplicate quads are silently ignored.

@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-04-13 — Third Session: Rigorous Multi-Product API
+
+### Writer / Reader API (prepares ~/quadstore for LawDek + PubDek consumption)
+- **Writer / Reader separation** with explicit types and `context.Context` throughout
+- **Batch** as the atomic commit unit (`Adds`, `Removes`, default `Label`, `Metadata`)
+- **`iter.Seq2[Quad, error]`** streaming reads via `Reader.Find`; `Reader.Count` for pattern counts
+- **`Partition`** opaque routing key (no-op today; reserved for per-partition backing files — Rung 2 of concurrent-writer evolution ladder)
+- **`Writer(ctx)` / `WriterFor(ctx, p)`** block on writer-slot acquisition with ctx cancellation
+- **Failed `Commit` rolls back**, Writer remains usable for retry; `Close` always releases slot
+- **Rung 1** of the concurrent-writer ladder (single writer slot per Store) lives inside the library — callers never see mutexes
+
+### Provenance / Journal (schema v2)
+- New `commits` table: UUIDv7 id (time-sortable), created_at, label, metadata JSON
+- New `commit_ops` journal: one row per add/remove per commit (full audit trail)
+- `quads` table unchanged — pure current-state projection; history lives in `commit_ops`
+- Documented well-known metadata keys: `MetaActor`, `MetaSource`, `MetaReason`
+
+### Label namespace (enforced on Writer.Commit)
+- Valid prefixes: `source:`, `derived:`, `human:`, `meta:` (empty label also valid)
+- Legacy `Add` / `AddBatch` / `Delete` remain permissive — no breaking change
+- Migration mapping for mega-index: `reference` → `source:reference`, `generated` → `derived:generated`, etc. (apply when mega-index next touched)
+
+### Schema migration
+- `meta(key, value)` table for store-level metadata — **NOT a quad**, to avoid polluting user views (`Stats`, `Match`, `Shape`)
+- `v1 → v2` migration idempotent; downgrade refused with clear error
+- `schema_version` starts at 2 on fresh stores
+
+### Test coverage
+- 11 new tests covering Writer/Reader, label validation, ctx cancellation, commit-after-close, retry-after-error, v1→v2 migration, downgrade refused, meta-not-visible-to-user
+- All 25 tests (14 legacy + 11 new) passing; existing behavior preserved
+
+### Incidental: `cmd/observe` vet cleanup
+- Fixed 5 `go vet` warnings (`fmt.Println("text\n")` → `fmt.Print("text\n\n")`) preserving visual blank-line separation
+
+### Design principle captured
+- **Rigorous first, adapt later** — structured/strict design over loose-with-plan-to-adapt; rigor gives future changes a reference point
+
 ## 2026-04-13 — Second Session: Clustering Breakthrough
 
 ### Observe Tool (`cmd/observe/`)
