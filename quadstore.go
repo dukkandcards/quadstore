@@ -20,6 +20,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -130,6 +131,52 @@ func (s *Store) Stats() (quads int64, predicates int64, err error) {
 	}
 	err = s.db.QueryRow(`SELECT COUNT(DISTINCT predicate) FROM quads`).Scan(&predicates)
 	return
+}
+
+// Vacuum runs SQLite VACUUM to reclaim free pages after bulk deletes
+// (e.g., after Writer.PruneOps). Blocks all other connections to the DB
+// for its duration. Requires free disk space approximately equal to the
+// current DB size (VACUUM rewrites the whole file).
+func (s *Store) Vacuum() error {
+	if _, err := s.db.Exec(`VACUUM`); err != nil {
+		return fmt.Errorf("quadstore: vacuum: %w", err)
+	}
+	return nil
+}
+
+// CommitStats reports commit-journal scale relative to a cutoff, used by
+// retention tooling to preview or verify a PruneOps sweep.
+type CommitStats struct {
+	TotalCommits int64 // all rows in commits
+	OldCommits   int64 // commits.created_at < cutoff.Unix()
+	TotalOps     int64 // all rows in commit_ops
+	OldOps       int64 // commit_ops rows whose commit is older than cutoff
+}
+
+// CommitStatsAt returns commit-journal counts with `old` fields measured
+// against the given cutoff. A zero cutoff yields 0 for both `Old` fields.
+func (s *Store) CommitStatsAt(cutoff time.Time) (CommitStats, error) {
+	var cs CommitStats
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&cs.TotalCommits); err != nil {
+		return cs, fmt.Errorf("quadstore: count commits: %w", err)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM commit_ops`).Scan(&cs.TotalOps); err != nil {
+		return cs, fmt.Errorf("quadstore: count commit_ops: %w", err)
+	}
+	if cutoff.IsZero() {
+		return cs, nil
+	}
+	cutoffUnix := cutoff.Unix()
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM commits WHERE created_at < ?`, cutoffUnix).Scan(&cs.OldCommits); err != nil {
+		return cs, fmt.Errorf("quadstore: count old commits: %w", err)
+	}
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM commit_ops WHERE commit_id IN (SELECT id FROM commits WHERE created_at < ?)`,
+		cutoffUnix,
+	).Scan(&cs.OldOps); err != nil {
+		return cs, fmt.Errorf("quadstore: count old commit_ops: %w", err)
+	}
+	return cs, nil
 }
 
 // --- Pattern matching ---

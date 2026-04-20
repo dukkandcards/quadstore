@@ -185,6 +185,45 @@ func (w *Writer) Commit(ctx context.Context, b Batch) error {
 	return tx.Commit()
 }
 
+// PruneOps deletes rows from commit_ops for commits whose created_at is
+// strictly before olderThan. The commits rows themselves are preserved —
+// provenance metadata (actor / source / reason / timestamps / labels)
+// survives; only the per-quad audit trail is discarded. Returns the
+// number of commit_ops rows deleted.
+//
+// Rationale: commit_ops is typically the largest table in a mature
+// store (one row per add/remove per commit; with bulk regen it can
+// dwarf the quads table itself). The current-state projection lives in
+// `quads` and is unaffected. `derived:*` labels are regeneratable from
+// `source:*` by design, so their audit trail is cheap to discard.
+//
+// Goes through the writer slot to avoid interleaving with Writer.Commit.
+// Runs VACUUM is the caller's responsibility (PRAGMA incremental_vacuum
+// or VACUUM); PruneOps only deletes rows.
+func (w *Writer) PruneOps(ctx context.Context, olderThan time.Time) (int64, error) {
+	if w.closed {
+		return 0, errors.New("quadstore: writer closed")
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	cutoff := olderThan.Unix()
+	res, err := w.store.db.ExecContext(ctx,
+		`DELETE FROM commit_ops
+		 WHERE commit_id IN (SELECT id FROM commits WHERE created_at < ?)`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("quadstore: prune commit_ops: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("quadstore: prune rows affected: %w", err)
+	}
+	return n, nil
+}
+
 func validateLabel(label string) error {
 	if label == "" {
 		return nil

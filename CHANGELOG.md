@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-04-20 — commit-journal retention (`Writer.PruneOps` + `cmd/prune`)
+
+### Why
+- `commit_ops` (one row per add/remove per commit) grows unbounded and is
+  typically the largest table in a mature store. SecDek at 1.13 M quads:
+  202 commits / **1.87 M commit_ops** rows, ~42% of the 1.7 GB DB file.
+- The `quads` table (current state) is the product's live data. `commit_ops`
+  is an audit trail — useful but not load-bearing for queries.
+- `derived:*` labels are regeneratable from `source:*` by project
+  convention, so their audit trail is explicitly disposable.
+
+### API (additive, no break)
+- `Writer.PruneOps(ctx, olderThan time.Time) (int64, error)` — deletes
+  `commit_ops` rows whose parent commit predates `olderThan`. Preserves
+  `commits` metadata rows and the `quads` current-state table.
+- `Store.CommitStatsAt(cutoff) (CommitStats, error)` — preview counts
+  (total + eligible) before running a sweep.
+- `Store.Vacuum()` — reclaim freed pages after a sweep.
+
+### New command: `cmd/prune`
+- `prune --db <path> --older-than 90d [--apply] [--vacuum]` — retention
+  sweep with a dry-run default.
+- `prune --db <path> --before YYYY-MM-DD ...` — absolute cutoff for
+  one-time aggressive sweeps (e.g., after a bulk regen).
+- Dry run reports DB size, total / eligible commits and ops. Apply
+  reports delete count + duration; vacuum reports MB reclaimed.
+
+### Test coverage
+- `TestWriterPruneOps` exercises: delete eligible ops, preserve commits
+  metadata, preserve quads table, idempotent second sweep, error after
+  Close. All 26 tests pass.
+
 ## 2026-04-20 — DSN PRAGMA fix (latent misconfiguration)
 
 ### What changed

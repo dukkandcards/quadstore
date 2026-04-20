@@ -62,6 +62,89 @@ func TestWriterCommit_AddsAndMetadata(t *testing.T) {
 	}
 }
 
+func TestWriterPruneOps(t *testing.T) {
+	s := tempStore(t)
+	ctx := context.Background()
+
+	w, err := s.Writer(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// Commit an "old" batch, then backdate its created_at via direct UPDATE.
+	if err := w.Commit(ctx, Batch{
+		Adds:  []Quad{{Subject: "a", Predicate: "p", Object: "o1"}},
+		Label: "source:test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldEpoch := time.Now().Add(-100 * 24 * time.Hour).Unix()
+	if _, err := s.db.Exec(`UPDATE commits SET created_at = ?`, oldEpoch); err != nil {
+		t.Fatal(err)
+	}
+
+	// Commit a "new" batch — left at current timestamp.
+	if err := w.Commit(ctx, Batch{
+		Adds:  []Quad{{Subject: "b", Predicate: "p", Object: "o2"}},
+		Label: "source:test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Baseline: 2 commits, 2 ops.
+	var commits, ops int
+	s.db.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&commits)
+	s.db.QueryRow(`SELECT COUNT(*) FROM commit_ops`).Scan(&ops)
+	if commits != 2 || ops != 2 {
+		t.Fatalf("pre-prune: expected 2 commits / 2 ops, got %d / %d", commits, ops)
+	}
+
+	// Prune ops older than 90 days — should remove the one backdated op.
+	cutoff := time.Now().Add(-90 * 24 * time.Hour)
+	deleted, err := w.PruneOps(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 op deleted, got %d", deleted)
+	}
+
+	// Commits row survives; only commit_ops was pruned.
+	s.db.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&commits)
+	s.db.QueryRow(`SELECT COUNT(*) FROM commit_ops`).Scan(&ops)
+	if commits != 2 {
+		t.Errorf("post-prune: expected 2 commits preserved, got %d", commits)
+	}
+	if ops != 1 {
+		t.Errorf("post-prune: expected 1 op remaining (the newer one), got %d", ops)
+	}
+
+	// Current-state projection (quads table) untouched.
+	n, err := s.Reader().Count(ctx, Pattern{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("post-prune: expected 2 quads in quads table, got %d", n)
+	}
+
+	// Idempotence: second prune with same cutoff does nothing.
+	deleted2, err := w.PruneOps(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted2 != 0 {
+		t.Errorf("second prune: expected 0 deleted, got %d", deleted2)
+	}
+
+	// PruneOps after Close should error.
+	w.Close()
+	if _, err := w.PruneOps(ctx, cutoff); err == nil {
+		t.Errorf("PruneOps after Close should error")
+	}
+}
+
 func TestWriterCommit_Removes(t *testing.T) {
 	s := tempStore(t)
 	ctx := context.Background()
