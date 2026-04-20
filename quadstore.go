@@ -46,7 +46,16 @@ type Store struct {
 // up to the current version; fails loudly if the on-disk schema is newer
 // than the library (downgrade refused).
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000")
+	// modernc.org/sqlite honors _pragma=key(value) in the DSN; the legacy
+	// _journal_mode / _busy_timeout shortcuts are silently ignored (verified
+	// 2026-04-20 — live SecDek DB had been in rollback-journal mode since
+	// project start). All four PRAGMAs go through _pragma=. cache_size=-262144
+	// is 256 MB (negative = kibibytes). synchronous=NORMAL is safe under WAL.
+	dsn := path + "?_pragma=journal_mode(WAL)" +
+		"&_pragma=busy_timeout(5000)" +
+		"&_pragma=synchronous(NORMAL)" +
+		"&_pragma=cache_size(-262144)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("quadstore: open %s: %w", path, err)
 	}

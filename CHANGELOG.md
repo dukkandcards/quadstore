@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-04-20 — DSN PRAGMA fix (latent misconfiguration)
+
+### What changed
+- `Open(path)` DSN rewritten to use `_pragma=key(value)` form for all four settings: `journal_mode(WAL)`, `busy_timeout(5000)`, `synchronous(NORMAL)`, `cache_size(-262144)` (256 MB).
+
+### Why (the latent bug)
+- The previous DSN (`?_journal_mode=WAL&_busy_timeout=5000`) was **silently ignored** by `modernc.org/sqlite` — those underscore-prefixed shortcuts aren't honored on file-backed DBs in the version used here.
+- Verified 2026-04-20 against the live SecDek database (1.7 GB): `journal_mode=delete`, `synchronous=2` (FULL), `cache_size=2000` (~2 MB default), `busy_timeout=0`. Every dek product opening a quadstore has been running in default rollback-journal mode since project start.
+- Post-fix verification on a fresh DB: `journal=wal`, `synchronous=1` (NORMAL), `cache_size=-262144`, `busy_timeout=5000`, WAL sidecar file created.
+
+### Impact
+- On next open by any consumer (SecDek, LawDek, PubDek, SlideDek-future), `journal_mode` persists to the file header and stays WAL. The other three pragmas are per-connection and apply on every open.
+- No breaking changes, no API changes, no behavior change at the Reader/Writer level.
+- All 25 existing tests pass unchanged.
+
+### Cache size rationale
+- `cache_size=-262144` = 256 MiB page cache. With WAL, the OS page cache is the main backstop; 256 MB keeps hot indexes (4 ms p,o lookups) resident for SecDek's 1.13M-quad working set while leaving plenty of room for 10M+ quads. Easily tuned per-product later via quadstore option surface if needed.
+
 ## 2026-04-13 — Third Session: Rigorous Multi-Product API
 
 ### Writer / Reader API (prepares ~/quadstore for LawDek + PubDek consumption)
