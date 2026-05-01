@@ -50,12 +50,19 @@ func Open(path string) (*Store, error) {
 	// modernc.org/sqlite honors _pragma=key(value) in the DSN; the legacy
 	// _journal_mode / _busy_timeout shortcuts are silently ignored (verified
 	// 2026-04-20 — live SecDek DB had been in rollback-journal mode since
-	// project start). All four PRAGMAs go through _pragma=. cache_size=-262144
+	// project start). All five PRAGMAs go through _pragma=. cache_size=-262144
 	// is 256 MB (negative = kibibytes). synchronous=NORMAL is safe under WAL.
+	// journal_size_limit=500MB caps WAL growth: SQLite checkpoints on schedule
+	// but with the default -1 (no limit) the WAL high-water mark is never
+	// truncated, so on long-lived writers the WAL file grows unbounded across
+	// bulk-ingest spikes (verified 2026-05-01 on live SecDek — WAL hit 1.5 GB
+	// after a 798K-quad forward-ingest run, recovered only via manual
+	// PRAGMA wal_checkpoint(TRUNCATE)).
 	dsn := path + "?_pragma=journal_mode(WAL)" +
 		"&_pragma=busy_timeout(5000)" +
 		"&_pragma=synchronous(NORMAL)" +
-		"&_pragma=cache_size(-262144)"
+		"&_pragma=cache_size(-262144)" +
+		"&_pragma=journal_size_limit(500000000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("quadstore: open %s: %w", path, err)
