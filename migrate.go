@@ -101,7 +101,14 @@ func Migrate(ctx context.Context, src, dst *Store, opts MigrateOptions) (Migrate
 			closeLoaders(loaders)
 			return stats, fmt.Errorf("quadstore migrate: open loader %s: %w", p.name, err)
 		}
-		bl.batchSize = opts.ChunkSize
+		// Do NOT override bl.batchSize. BulkLoader's default
+		// (bulkBatchRows = 500) is sized for SQLite's
+		// SQLITE_MAX_VARIABLE_NUMBER ceiling: 500 rows × 4 cols = 2000
+		// vars, well under the 32766 modernc.org/sqlite limit. A naive
+		// override (e.g. ChunkSize = 10000) produces 40000 vars and
+		// fails with `SQL logic error: too many SQL variables`.
+		// opts.ChunkSize controls progress-reporting cadence, NOT
+		// per-INSERT row count.
 		loaders[p.name] = bl
 	}
 	// Ensure all loaders close on any exit path so SQLite indexes get
@@ -203,7 +210,12 @@ func streamQuads(
 		}
 		stats.QuadsCopied++
 		stats.PerPartition[target]++
-		if progress != nil && stats.QuadsCopied%int64(bl.batchSize) == 0 {
+		// Progress cadence is decoupled from BulkLoader.batchSize so
+		// the SQLite-variable-limit fix above does not flood the log.
+		// Default to a 10000-quad cadence for visibility on multi-
+		// million-quad runs without spamming.
+		const progressEvery = 10000
+		if progress != nil && stats.QuadsCopied%progressEvery == 0 {
 			progress(MigrateProgress{
 				Partition:        target,
 				QuadsCopiedSoFar: stats.QuadsCopied,
