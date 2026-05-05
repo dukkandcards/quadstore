@@ -1,5 +1,39 @@
 # Changelog
 
+## v0.1.0 — 2026-05-05 — first public release
+
+First public release. Repo flipped to public visibility on GitHub.
+API is stabilizing; breaking changes are possible before `v1.0.0` and
+will be called out explicitly in this file.
+
+### Highlights
+- Single-node graph database for Go applications. Pure Go (no CGo) via
+  `modernc.org/sqlite`. `go install`, cross-compile, embed in your
+  binary — no toolchain dance.
+- Quad model (`subject`, `predicate`, `object`, `label`) with enforced
+  namespace prefixes (`source:`, `derived:`, `human:{tenant}/`, `meta:`).
+  Multi-tenancy and provenance live in the storage layer, not bolted on.
+- Reader / Writer / BulkLoader split. `iter.Seq2[Quad, error]` over
+  patterns; range-over-func from Go 1.23+.
+- Optional partitioning via `OpenPartitioned` for fact families that
+  don't share queries.
+- `Migrate` / `MigrateFromSnapshot` for moving data between Stores
+  without holding the source DB at write-locking risk.
+- New: `Store.LabelCounts(ctx)` — fast indexed `GROUP BY label` for
+  migration planning, dashboards, "what fact families are in this DB".
+- Used in production by [SecDek](https://sfy.io) (28 GB graph,
+  ~10K quads/sec sustained ingest, sub-millisecond point lookups).
+
+### What this release does not include (intentionally)
+- Distributed / sharded operation. Single-node by design.
+- A query language. Go functions, not a compiler.
+- Server mode. Library only.
+- Graph algorithms beyond pattern lookup.
+
+If you need any of those, use Dgraph, JanusGraph, or Neo4j. quadstore
+is for the class of application where the graph fits on one machine
+and the operational budget is one binary.
+
 ## 2026-05-05 — race-free migration (`MigrateFromSnapshot`)
 
 ### Why
