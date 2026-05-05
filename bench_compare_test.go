@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -162,6 +163,98 @@ func BenchmarkCompare_RawSQLite_FindBySubject(b *testing.B) {
 // BenchmarkCommit_Batch1k, BenchmarkFind_BySubject. Compare with the
 // _ = context.Background() pattern below to keep imports symmetric.
 var _ = context.Background
+
+// rawSQLiteSchemaQuadstoreShape mirrors quadstore's schema: same
+// quads table, same UNIQUE(s,p,o,l), same four secondary indexes.
+// Used by the diagnostic bench below to isolate "is the overhead from
+// the schema?" vs "is it from Go-side BulkLoader plumbing?".
+const rawSQLiteSchemaQuadstoreShape = `
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+CREATE TABLE IF NOT EXISTS quads (
+    subject   TEXT NOT NULL,
+    predicate TEXT NOT NULL,
+    object    TEXT NOT NULL,
+    label     TEXT NOT NULL DEFAULT '',
+    UNIQUE(subject, predicate, object, label)
+);
+CREATE INDEX IF NOT EXISTS idx_spo ON quads(subject, predicate, object);
+CREATE INDEX IF NOT EXISTS idx_pos ON quads(predicate, object, subject);
+CREATE INDEX IF NOT EXISTS idx_osp ON quads(object, subject, predicate);
+CREATE INDEX IF NOT EXISTS idx_lsp ON quads(label, subject, predicate);
+`
+
+func tempRawSQLiteQuadstoreShape(b *testing.B) *sql.DB {
+	b.Helper()
+	dir := b.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "shape.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(rawSQLiteSchemaQuadstoreShape); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := db.Exec(rawSQLiteBulkPragmas); err != nil {
+		b.Fatal(err)
+	}
+	return db
+}
+
+// BenchmarkCompare_RawSQLite_QuadstoreShape replicates BulkLoader's
+// behavior in raw-SQLite terms: quadstore's schema, drop 3 indexes
+// at start, multi-row INSERT in 500-row batches, rebuild indexes at
+// end. If this matches quadstore's BulkLoader timing, the overhead
+// is structural to the schema/index pattern; if it's faster, the
+// overhead is Go-side BulkLoader plumbing we could optimize.
+func BenchmarkCompare_RawSQLite_QuadstoreShape(b *testing.B) {
+	for _, total := range []int{1000, 10000, 100000} {
+		b.Run(fmt.Sprintf("N=%d", total), func(b *testing.B) {
+			b.ResetTimer()
+			for run := 0; run < b.N; run++ {
+				b.StopTimer()
+				db := tempRawSQLiteQuadstoreShape(b)
+				b.StartTimer()
+				if _, err := db.Exec(`DROP INDEX idx_pos; DROP INDEX idx_osp; DROP INDEX idx_lsp;`); err != nil {
+					b.Fatal(err)
+				}
+				const batchSize = 500
+				args := make([]any, 0, batchSize*4)
+				var sb strings.Builder
+				for batchStart := 0; batchStart < total; batchStart += batchSize {
+					end := batchStart + batchSize
+					if end > total {
+						end = total
+					}
+					sb.Reset()
+					sb.WriteString(`INSERT OR IGNORE INTO quads (subject, predicate, object, label) VALUES `)
+					args = args[:0]
+					for i := batchStart; i < end; i++ {
+						if i > batchStart {
+							sb.WriteByte(',')
+						}
+						sb.WriteString(`(?,?,?,?)`)
+						args = append(args, fmt.Sprintf("s%d-%d", run, i), "p", "o", "source:bench")
+					}
+					if _, err := db.Exec(sb.String(), args...); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if _, err := db.Exec(`
+					CREATE INDEX idx_pos ON quads(predicate, object, subject);
+					CREATE INDEX idx_osp ON quads(object, subject, predicate);
+					CREATE INDEX idx_lsp ON quads(label, subject, predicate);
+				`); err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				db.Close()
+				b.StartTimer()
+			}
+		})
+	}
+}
+
 
 // rawSQLiteBulkLoad emits `total` rows in 500-row transactions against
 // a raw SQLite quad table (bulk-tuned PRAGMAs). Centralizes the loop so

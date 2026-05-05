@@ -97,22 +97,67 @@ Read these as overhead numbers, not headline numbers:
 Per-quad rate stays flat across N for both — the overhead is structural,
 not amortizable, but bounded at roughly 2× at scale.
 
+### Where the 2× actually lives
+
+The simple raw SQLite schema has one unique constraint on
+`(label, subject, predicate, object)` and one secondary index on
+`subject`. quadstore's schema has a unique constraint on
+`(subject, predicate, object, label)` plus four secondary indexes
+(`idx_spo`, `idx_pos`, `idx_osp`, `idx_lsp`) so that `Pattern` reads
+are fast in any direction. To isolate "is the overhead from schema or
+from the Go layer?", `BenchmarkCompare_RawSQLite_QuadstoreShape` runs
+raw modernc SQLite using quadstore's exact schema and exact pattern
+(drop 3 indexes, multi-row INSERT in 500-row batches, rebuild). Same
+benchtime, same machine:
+
+```
+BenchmarkCompare_RawSQLite_QuadstoreShape/N=1000-10            6.76 ms/op
+BenchmarkCompare_Quadstore_BulkLoader/N=1000-10                7.20 ms/op   (+6%)
+
+BenchmarkCompare_RawSQLite_QuadstoreShape/N=10000-10          73.05 ms/op
+BenchmarkCompare_Quadstore_BulkLoader/N=10000-10              74.46 ms/op   (+2%)
+
+BenchmarkCompare_RawSQLite_QuadstoreShape/N=100000-10        773.77 ms/op
+BenchmarkCompare_Quadstore_BulkLoader/N=100000-10            788.05 ms/op   (+2%)
+```
+
+**The Go-side BulkLoader is within ~2% of expert hand-rolled SQLite
+using the same schema.** The 2× vs the simple raw schema is the price
+of the four-direction index coverage that makes `Pattern` reads fast
+regardless of which columns you bind. Drop those indexes and bulk
+load gets faster but `Pattern` reads degrade to table scans on the
+unbound dimensions.
+
+If your workload only ever reads by subject, you can replicate
+quadstore's pattern in 200 lines yourself — that's the lower bound.
+If you read by predicate, object, or label too, you'd reproduce
+quadstore's schema and end up at ~the same throughput.
+
 Where the overhead comes from:
 
-- **Label namespace validation** on every write (`source:` / `derived:` /
-  `human:{tenant}` / `meta:` prefix check).
+- **Schema (~98% of bulk-path overhead).** Four secondary indexes
+  (idx_spo, idx_pos, idx_osp, idx_lsp) exist so that `Pattern` reads
+  are fast no matter which columns you bind. SQLite has to maintain
+  those B-trees. The raw simple schema has one secondary index, which
+  is why it's faster on the writer side and slower on every read
+  shape that isn't subject-prefixed.
+- **Label namespace validation** on every write (`source:` /
+  `derived:` / `human:{tenant}` / `meta:` prefix check). Cheap, but
+  non-zero.
 - **Commit-row writes** — `Writer.Commit` writes a `commits` +
   `commit_ops` audit row recording the partition, label, count, and
   timestamp. That's why single-quad commit shows the largest relative
   cost: one user quad + one commit row + per-statement plumbing.
   `BulkLoader` skips the audit trail by design.
 - **Index drop+rebuild on bulk** — `BulkLoader.Close` rebuilds three
-  secondary indexes (idx_pos, idx_osp, idx_lsp). On a 100k load this
-  is ~22% of total time per profile; below ~5k rows it's
-  net-negative, which is why `Writer.Commit` batches are the right
-  tool for small loads.
+  secondary indexes. The drop+rebuild is a net win at 10k+ rows
+  (without it the same 100k load is 27% slower on our hardware);
+  for loads under ~1-2k rows the rebuild cost can match or exceed
+  the inline-maintenance cost it would have replaced, so for small
+  loads `Writer.Commit` batches are usually the right choice.
 - **Per-Writer plumbing** — context propagation, partition routing,
-  per-call validation, the `iter.Seq2` read pipeline.
+  per-call validation, the `iter.Seq2` read pipeline. ~2% of bulk
+  total; basically free.
 
 Where quadstore wins:
 
