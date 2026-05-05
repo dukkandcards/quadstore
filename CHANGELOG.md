@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased — Pebble backend (opt-in)
+
+### Added
+- **`OpenPebble(path)` returns a `*PebbleStore`**: a Pebble-backed
+  Store using the same Writer / Reader / BulkLoader surface as the
+  default SQLite-backed `Open(path)`. Keeps SQLite as the default
+  backend; users opt in.
+- `*PebbleStore` supports: Writer.Commit (and CommitSync for
+  per-Commit fsync), Reader.Find with `iter.Seq2[Quad, error]` and
+  Pattern routing across SPO / POS / OSP / LSP keyspaces,
+  Reader.Count, BulkLoader (and BulkLoaderWithLabel) with Add /
+  Flush / Close / Stats.
+- Audit trail (`commits` + `commit_ops`) is implemented in Pebble
+  keyspaces, mirroring the SQLite tables; `Batch.NoAudit` suppresses
+  the audit writes the same way it does on SQLite.
+- Label namespace validation (`source:` / `derived:` /
+  `human:{tenant}/` / `meta:`) enforced at Writer.Commit on both
+  backends.
+
+### Performance
+- Single-quad audited Commit on M1 Pro: **5.95 µs** (Pebble) vs
+  ~107 µs (SQLite), 18× faster.
+- 1k-quad batch commit: **6.13 ms** (Pebble) vs ~13.1 ms (SQLite),
+  2.1× faster.
+- Find by subject (~100 rows from 10k): **22.7 µs** (Pebble) vs
+  ~68.9 µs (SQLite), 3× faster.
+- 100k-quad bulk load: **305 ms** (Pebble) vs ~764 ms (SQLite),
+  2.5× faster.
+- Bulk loads under ~5k rows are slower on Pebble due to the
+  memtable flush at Close; for those, `Open(path)` (SQLite) is
+  still the better choice.
+
+Full breakdown including durability semantics: see
+[`docs/PEBBLE_VS_SQLITE.md`](./docs/PEBBLE_VS_SQLITE.md).
+
+### What's not yet in `*PebbleStore`
+- Partitioning (single Pebble dir per Store).
+- Match / Path / Stats / CommitStats / LabelCounts / Migrate.
+- These remain SQLite-only until ported.
+
+### Dependency cost
+- Pebble pulls in ~20 transitive packages (CockroachDB redact,
+  Sentry SDK, Prometheus client, snappy, klauspost/compress).
+  Pure Go (no CGo). If transitive-dep size matters more than the
+  perf wins, stay on `Open(path)`.
+
 ## v0.1.0 — 2026-05-05 — first public release
 
 First public release. Repo flipped to public visibility on GitHub.
