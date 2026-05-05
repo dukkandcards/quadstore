@@ -124,6 +124,7 @@ Thank you, Barak and Robert. We are happily here because you were there first. I
 - [`docs/PERFORMANCE.md`](./docs/PERFORMANCE.md) — measured numbers, what gets slow, how to fix it
 - [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md) — every known way this is worse than what you might have hoped for; read before adopting
 - [`docs/RETHINK_2026.md`](./docs/RETHINK_2026.md) — pre-mortem: what we'd build differently today, and the tests that would change our minds
+- [`docs/PEBBLE_VS_SQLITE.md`](./docs/PEBBLE_VS_SQLITE.md) — head-to-head bench numbers from a Pebble-backed prototype (4 of 5 metrics in Pebble's favor on M1 Pro)
 - [`docs/PARTITIONING_DESIGN.md`](./docs/PARTITIONING_DESIGN.md) — partition routing model and migration semantics
 - [`docs/INCREMENTAL_PROCESSING.md`](./docs/INCREMENTAL_PROCESSING.md) — patterns for ingest pipelines that don't re-derive the whole world every tick
 - [`CHANGELOG.md`](./CHANGELOG.md) — version history with breaking-change callouts
