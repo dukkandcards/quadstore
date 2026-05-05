@@ -168,6 +168,7 @@ Full design rationale: [`docs/PARTITIONING_DESIGN.md`](docs/PARTITIONING_DESIGN.
 
 ## Documentation
 
+- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) — measured numbers, practical guidance, what gets slow and how to fix it.
 - [`docs/PARTITIONING_DESIGN.md`](docs/PARTITIONING_DESIGN.md) — the partition routing model and migration semantics.
 - [`docs/INCREMENTAL_PROCESSING.md`](docs/INCREMENTAL_PROCESSING.md) — patterns for ingest pipelines that don't re-derive the whole world every tick.
 - [`CHANGELOG.md`](CHANGELOG.md) — version history with breaking-change callouts.
