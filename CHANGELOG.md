@@ -69,6 +69,9 @@ Full breakdown including durability semantics: see
   Sentry SDK, Prometheus client, snappy, klauspost/compress).
   Pure Go (no CGo). If transitive-dep size matters more than the
   perf wins, stay on `Open(path)`.
+- All Pebble-introduced deps are permissive licenses (BSD-2 / BSD-3 /
+  MIT / Apache 2.0). No AGPL, no BSL, no commercial-use restrictions.
+  Audited 2026-05-05.
 
 ## v0.1.0 — 2026-05-05 — first public release
 
