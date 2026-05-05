@@ -20,11 +20,23 @@ import (
 //
 // On a partitioned Store, every quad in a Batch must route to the same
 // partition; otherwise Writer.Commit returns ErrCrossPartitionBatch.
+//
+// NoAudit, when true, suppresses the per-Commit `commits` row and the
+// per-quad `commit_ops` rows. Label validation, partition routing, and
+// the actual `quads` writes still happen, and the whole batch is still
+// atomic. Use this for high-throughput workloads (~3× faster on
+// single-quad commits) where you don't need the audit trail. The
+// tradeoff: writes performed with NoAudit are invisible to
+// Reader.Commits, do not appear in Migrate(CopyCommits=true) output,
+// and cannot be tailed via the commits table. If unsure, leave it
+// false — the audit trail is the point of using Writer.Commit over
+// BulkLoader.
 type Batch struct {
 	Adds     []Quad
 	Removes  []Quad
 	Label    string
 	Metadata map[string]string
+	NoAudit  bool
 }
 
 // Well-known Metadata keys. Callers may add any keys; these are
@@ -181,22 +193,25 @@ func (w *Writer) Commit(ctx context.Context, b Batch) error {
 	}
 	defer tx.Rollback() // no-op after tx.Commit succeeds
 
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO commits (id, created_at, label, metadata) VALUES (?, ?, ?, ?)`,
-		commitID.String(), time.Now().Unix(), b.Label, metadataJSON,
-	); err != nil {
-		return fmt.Errorf("quadstore: insert commit: %w", err)
+	if !b.NoAudit {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO commits (id, created_at, label, metadata) VALUES (?, ?, ?, ?)`,
+			commitID.String(), time.Now().Unix(), b.Label, metadataJSON,
+		); err != nil {
+			return fmt.Errorf("quadstore: insert commit: %w", err)
+		}
 	}
 
 	// Only prepare statements we'll actually use. A common shape is
 	// "Adds-only, no Removes" — preparing the DELETE in that case is
 	// pure waste. Saves ~5-10 µs per Commit on the hot single-add path.
+	// logOp is only needed when audit is on AND we have writes.
 	var (
 		addQuad    *sql.Stmt
 		removeQuad *sql.Stmt
 		logOp      *sql.Stmt
 	)
-	if len(b.Adds) > 0 || len(b.Removes) > 0 {
+	if !b.NoAudit && (len(b.Adds) > 0 || len(b.Removes) > 0) {
 		logOp, err = tx.PrepareContext(ctx,
 			`INSERT INTO commit_ops (commit_id, op, subject, predicate, object, label) VALUES (?, ?, ?, ?, ?, ?)`,
 		)
@@ -232,16 +247,20 @@ func (w *Writer) Commit(ctx context.Context, b Batch) error {
 		if _, err := addQuad.ExecContext(ctx, q.Subject, q.Predicate, q.Object, label); err != nil {
 			return fmt.Errorf("quadstore: add quad: %w", err)
 		}
-		if _, err := logOp.ExecContext(ctx, commitID.String(), "add", q.Subject, q.Predicate, q.Object, label); err != nil {
-			return fmt.Errorf("quadstore: log add op: %w", err)
+		if logOp != nil {
+			if _, err := logOp.ExecContext(ctx, commitID.String(), "add", q.Subject, q.Predicate, q.Object, label); err != nil {
+				return fmt.Errorf("quadstore: log add op: %w", err)
+			}
 		}
 	}
 	for _, q := range b.Removes {
 		if _, err := removeQuad.ExecContext(ctx, q.Subject, q.Predicate, q.Object, q.Label); err != nil {
 			return fmt.Errorf("quadstore: remove quad: %w", err)
 		}
-		if _, err := logOp.ExecContext(ctx, commitID.String(), "remove", q.Subject, q.Predicate, q.Object, q.Label); err != nil {
-			return fmt.Errorf("quadstore: log remove op: %w", err)
+		if logOp != nil {
+			if _, err := logOp.ExecContext(ctx, commitID.String(), "remove", q.Subject, q.Predicate, q.Object, q.Label); err != nil {
+				return fmt.Errorf("quadstore: log remove op: %w", err)
+			}
 		}
 	}
 

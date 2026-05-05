@@ -43,6 +43,33 @@ func BenchmarkCommit_SingleQuad(b *testing.B) {
 	}
 }
 
+// Per-commit overhead WITHOUT audit rows — the high-throughput path
+// for callers who don't need the commit_ops journal. Should approach
+// raw modernc.org/sqlite single-INSERT cost.
+func BenchmarkCommit_SingleQuad_NoAudit(b *testing.B) {
+	s := tempBenchStore(b)
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		w, err := s.Writer(ctx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := w.Commit(ctx, Batch{
+			Adds: []Quad{{
+				Subject:   fmt.Sprintf("s%d", i),
+				Predicate: "p",
+				Object:    "o",
+				Label:     "source:bench",
+			}},
+			NoAudit: true,
+		}); err != nil {
+			b.Fatal(err)
+		}
+		w.Close()
+	}
+}
+
 // Batched-commit throughput — ingest pipelines take this path.
 // Watch for per-triple-in-batch costs.
 func BenchmarkCommit_Batch1k(b *testing.B) {

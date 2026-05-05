@@ -268,6 +268,78 @@ func TestWriter_CommitAfterClose(t *testing.T) {
 	}
 }
 
+func TestWriterCommit_NoAudit(t *testing.T) {
+	s := tempStore(t)
+	ctx := context.Background()
+
+	w, err := s.Writer(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// NoAudit: quads land, audit rows do not.
+	if err := w.Commit(ctx, Batch{
+		Adds: []Quad{
+			{Subject: "a", Predicate: "b", Object: "c", Label: "source:fast"},
+			{Subject: "d", Predicate: "e", Object: "f", Label: "source:fast"},
+		},
+		NoAudit: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.Reader().Count(ctx, Pattern{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("expected 2 quads, got %d", n)
+	}
+
+	var commits, ops int
+	if err := s.parts[0].db.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&commits); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.parts[0].db.QueryRow(`SELECT COUNT(*) FROM commit_ops`).Scan(&ops); err != nil {
+		t.Fatal(err)
+	}
+	if commits != 0 || ops != 0 {
+		t.Errorf("NoAudit wrote audit rows: commits=%d ops=%d (want 0/0)", commits, ops)
+	}
+
+	// Mixing NoAudit and audited commits on the same writer is fine —
+	// the next audited commit lands its own row.
+	if err := w.Commit(ctx, Batch{
+		Adds:  []Quad{{Subject: "g", Predicate: "h", Object: "i"}},
+		Label: "source:audited",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.parts[0].db.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&commits); err != nil {
+		t.Fatal(err)
+	}
+	if commits != 1 {
+		t.Errorf("expected 1 commit row after audited write, got %d", commits)
+	}
+}
+
+func TestWriterCommit_NoAudit_LabelStillValidated(t *testing.T) {
+	// NoAudit must not be a label-validation bypass.
+	s := tempStore(t)
+	ctx := context.Background()
+	w, _ := s.Writer(ctx)
+	defer w.Close()
+
+	err := w.Commit(ctx, Batch{
+		Adds:    []Quad{{Subject: "a", Predicate: "b", Object: "c", Label: "nope"}},
+		NoAudit: true,
+	})
+	if err == nil {
+		t.Fatal("NoAudit batch with bad label should still be rejected")
+	}
+}
+
 func TestWriter_RetryAfterError(t *testing.T) {
 	// A validation error should leave the Writer usable for retry.
 	s := tempStore(t)
