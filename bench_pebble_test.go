@@ -31,9 +31,9 @@ func tempPebbleStore(b *testing.B) *pebbleq.Store {
 	return s
 }
 
-// BenchmarkPebble_SingleQuad — Pebble-side of BenchmarkCommit_SingleQuad.
-// One quad per Commit. Pebble has no audit trail in this prototype,
-// so this is the closest analog to BenchmarkCommit_SingleQuad_NoAudit.
+// BenchmarkPebble_SingleQuad — audited single-quad Commit on the
+// Pebble backend. Mirror of BenchmarkCommit_SingleQuad on SQLite:
+// commits + commit_ops audit rows are written.
 func BenchmarkPebble_SingleQuad(b *testing.B) {
 	s := tempPebbleStore(b)
 	ctx := context.Background()
@@ -52,6 +52,34 @@ func BenchmarkPebble_SingleQuad(b *testing.B) {
 				Object:    "o",
 				Label:     "source:bench",
 			}},
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkPebble_SingleQuad_NoAudit — same as above but with
+// Batch.NoAudit suppressing the audit rows. Mirror of
+// BenchmarkCommit_SingleQuad_NoAudit on SQLite.
+func BenchmarkPebble_SingleQuad_NoAudit(b *testing.B) {
+	s := tempPebbleStore(b)
+	ctx := context.Background()
+	w, err := s.Writer(ctx)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer w.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := w.Commit(ctx, pebbleq.Batch{
+			Adds: []pebbleq.Quad{{
+				Subject:   fmt.Sprintf("s%d", i),
+				Predicate: "p",
+				Object:    "o",
+				Label:     "source:bench",
+			}},
+			NoAudit: true,
 		}); err != nil {
 			b.Fatal(err)
 		}
@@ -112,7 +140,7 @@ func BenchmarkPebble_FindBySubject(b *testing.B) {
 	r := s.Reader()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		n, err := r.CountBySubject(ctx, "s50")
+		n, err := r.Count(ctx, pebbleq.Pattern{Subject: "s50"})
 		if err != nil {
 			b.Fatal(err)
 		}
