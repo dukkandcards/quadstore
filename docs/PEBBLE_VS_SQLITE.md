@@ -219,6 +219,48 @@ The prototype defaults to `NoSync` to match SQLite's default. A
 durability. Production use would expose the choice as a `BatchOptions`
 field.
 
+## Concurrent writers — the architectural advantage doesn't show up at small-commit granularity
+
+Pebble removes SQLite's single-writer-per-file rule. We expected
+this to be Pebble's biggest visible win on a multi-CPU host: 8
+goroutines committing in parallel should scale near-linearly on
+Pebble while serializing entirely on SQLite. The benchmark
+disagrees.
+
+`BenchmarkConcurrentWriters_*_8x` (M1 Pro, 8 goroutines × 100
+single-quad commits each = 800 commits total):
+
+| workload | SQLite | Pebble | Pebble vs SQLite |
+|---|---|---|---|
+| 800 commits, serial (1 goroutine) | 79.4 ms | 15.4 ms | 5.1× faster |
+| 800 commits, 8 goroutines concurrent | 83.0 ms | 15.3 ms | 5.4× faster |
+| 40k quads in 8×50 batches of 100, concurrent | 590 ms | 295 ms | 2.0× faster |
+
+Two findings:
+
+1. **SQLite shows ~no concurrent scaling.** Expected — the writer
+   slot serializes goroutines, so concurrent and serial are the
+   same total time.
+2. **Pebble shows ~no concurrent scaling either.** Surprising. The
+   WAL append is internally serial; 8 goroutines committing single
+   quads each contend for the WAL latch and effectively serialize.
+
+The Pebble advantage is the per-commit cost, not the concurrency
+shape. At small-commit granularity it's 5× faster because each
+commit avoids SQLite's `BeginTx → INSERT → INSERT(audit) → COMMIT`
+ceremony. At big-batch granularity (1k quads/commit), the win is
+2× because the per-quad write path is the bottleneck for both
+backends and Pebble's sorted-keyspace writes are about twice as
+fast as SQLite's B-tree maintenance.
+
+**Practical takeaway:** don't pick Pebble *because* of concurrent
+writers. Pick it because it's 2-5× faster regardless of whether
+your code is single-goroutine or multi-goroutine. Concurrent
+scaling on Pebble will happen at workloads with substantially more
+work-per-commit than this synthetic bench provides — e.g., real
+ingest pipelines with mixed-size string allocation, JSON marshaling,
+deduplication, etc.
+
 ## What this benchmark does NOT prove
 
 Honesty list before anyone gets excited:

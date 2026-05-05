@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/dukkandcards/quadstore/internal/pebbleq"
@@ -182,5 +183,261 @@ func BenchmarkPebble_BulkLoader(b *testing.B) {
 				b.StartTimer()
 			}
 		})
+	}
+}
+
+// Concurrent-writers benchmarks. SQLite serializes (single-writer
+// rule per file); Pebble scales with goroutines. The point is to
+// measure the structural advantage of Pebble's no-writer-slot
+// design under concurrent ingest pressure.
+//
+// Each iteration: spawn `goroutines` goroutines, each commits
+// `commitsPerGoroutine` single-quad batches. Total commits per
+// iteration = goroutines × commitsPerGoroutine.
+
+const concurrentGoroutines = 8
+const concurrentCommitsPerGoroutine = 100
+
+// BenchmarkConcurrentWriters_SQLite_8x — single-writer SQLite,
+// 8 goroutines × 100 commits each. Goroutines block on the writer
+// slot; total time should be ~8× the serial 100-commit time.
+func BenchmarkConcurrentWriters_SQLite_8x(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		s := tempBenchStore(b)
+		b.StartTimer()
+		runConcurrentSQLite(b, s)
+		b.StopTimer()
+		s.Close()
+		b.StartTimer()
+	}
+}
+
+func runConcurrentSQLite(b *testing.B, s *Store) {
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for g := 0; g < concurrentGoroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			w, err := s.Writer(ctx)
+			if err != nil {
+				b.Error(err)
+				return
+			}
+			defer w.Close()
+			for i := 0; i < concurrentCommitsPerGoroutine; i++ {
+				if err := w.Commit(ctx, Batch{
+					Adds: []Quad{{
+						Subject:   fmt.Sprintf("g%d-i%d", g, i),
+						Predicate: "p",
+						Object:    "o",
+						Label:     "source:bench",
+					}},
+				}); err != nil {
+					b.Error(err)
+					return
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+}
+
+// BenchmarkConcurrentWriters_Pebble_8x — Pebble has no single-
+// writer slot; 8 goroutines run truly concurrent commits.
+func BenchmarkConcurrentWriters_Pebble_8x(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		s := tempPebbleStore(b)
+		b.StartTimer()
+		runConcurrentPebble(b, s)
+		b.StopTimer()
+		s.Close()
+		b.StartTimer()
+	}
+}
+
+func runConcurrentPebble(b *testing.B, s *pebbleq.Store) {
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for g := 0; g < concurrentGoroutines; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			w, err := s.Writer(ctx)
+			if err != nil {
+				b.Error(err)
+				return
+			}
+			defer w.Close()
+			for i := 0; i < concurrentCommitsPerGoroutine; i++ {
+				if err := w.Commit(ctx, pebbleq.Batch{
+					Adds: []pebbleq.Quad{{
+						Subject:   fmt.Sprintf("g%d-i%d", g, i),
+						Predicate: "p",
+						Object:    "o",
+						Label:     "source:bench",
+					}},
+				}); err != nil {
+					b.Error(err)
+					return
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+}
+
+// BenchmarkSerialWriter_SQLite_800 — baseline: same total commits
+// (8 × 100) but serial in one writer. Ratio of Concurrent_8x time
+// to this is the "scaling factor": SQLite should be ~1× (no win
+// from goroutines), Pebble should be much less than 1× (real
+// concurrent advantage).
+func BenchmarkSerialWriter_SQLite_800(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		s := tempBenchStore(b)
+		b.StartTimer()
+		runSerialSQLite(b, s)
+		b.StopTimer()
+		s.Close()
+		b.StartTimer()
+	}
+}
+
+func runSerialSQLite(b *testing.B, s *Store) {
+	ctx := context.Background()
+	w, err := s.Writer(ctx)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer w.Close()
+	for i := 0; i < concurrentGoroutines*concurrentCommitsPerGoroutine; i++ {
+		if err := w.Commit(ctx, Batch{
+			Adds: []Quad{{
+				Subject:   fmt.Sprintf("s%d", i),
+				Predicate: "p",
+				Object:    "o",
+				Label:     "source:bench",
+			}},
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkConcurrentWriters_BigBatch_SQLite_8x — 8 goroutines,
+// each committing 100 quads per batch × 50 batches = 5000 quads.
+// Larger batches mean per-commit memtable/B-tree work dominates
+// (rather than serial WAL append), which is where Pebble's
+// architectural concurrency should actually express. SQLite still
+// serializes at the writer slot.
+func BenchmarkConcurrentWriters_BigBatch_SQLite_8x(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		s := tempBenchStore(b)
+		b.StartTimer()
+		ctx := context.Background()
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func(g int) {
+				defer wg.Done()
+				w, _ := s.Writer(ctx)
+				defer w.Close()
+				for i := 0; i < 50; i++ {
+					batch := Batch{Label: "source:bench", Adds: make([]Quad, 0, 100)}
+					for j := 0; j < 100; j++ {
+						batch.Adds = append(batch.Adds, Quad{
+							Subject:   fmt.Sprintf("g%d-i%d-j%d", g, i, j),
+							Predicate: "p",
+							Object:    "o",
+						})
+					}
+					if err := w.Commit(ctx, batch); err != nil {
+						b.Error(err)
+						return
+					}
+				}
+			}(g)
+		}
+		wg.Wait()
+		b.StopTimer()
+		s.Close()
+		b.StartTimer()
+	}
+}
+
+// BenchmarkConcurrentWriters_BigBatch_Pebble_8x — same workload on
+// Pebble. Per-batch memtable work amortizes better; 8 goroutines
+// should land closer to "1× serial-batch time" rather than 8×.
+func BenchmarkConcurrentWriters_BigBatch_Pebble_8x(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		s := tempPebbleStore(b)
+		b.StartTimer()
+		ctx := context.Background()
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func(g int) {
+				defer wg.Done()
+				w, _ := s.Writer(ctx)
+				defer w.Close()
+				for i := 0; i < 50; i++ {
+					batch := pebbleq.Batch{Label: "source:bench", Adds: make([]pebbleq.Quad, 0, 100)}
+					for j := 0; j < 100; j++ {
+						batch.Adds = append(batch.Adds, pebbleq.Quad{
+							Subject:   fmt.Sprintf("g%d-i%d-j%d", g, i, j),
+							Predicate: "p",
+							Object:    "o",
+						})
+					}
+					if err := w.Commit(ctx, batch); err != nil {
+						b.Error(err)
+						return
+					}
+				}
+			}(g)
+		}
+		wg.Wait()
+		b.StopTimer()
+		s.Close()
+		b.StartTimer()
+	}
+}
+
+// BenchmarkSerialWriter_Pebble_800 — Pebble equivalent baseline.
+func BenchmarkSerialWriter_Pebble_800(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		s := tempPebbleStore(b)
+		b.StartTimer()
+		runSerialPebble(b, s)
+		b.StopTimer()
+		s.Close()
+		b.StartTimer()
+	}
+}
+
+func runSerialPebble(b *testing.B, s *pebbleq.Store) {
+	ctx := context.Background()
+	w, err := s.Writer(ctx)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer w.Close()
+	for i := 0; i < concurrentGoroutines*concurrentCommitsPerGoroutine; i++ {
+		if err := w.Commit(ctx, pebbleq.Batch{
+			Adds: []pebbleq.Quad{{
+				Subject:   fmt.Sprintf("s%d", i),
+				Predicate: "p",
+				Object:    "o",
+				Label:     "source:bench",
+			}},
+		}); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
