@@ -7,32 +7,31 @@ derivation / migration pipelines.
 table Y," you've built a loop that processes data you already
 processed. Don't. The simplest fix — and the right one in most cases —
 is a per-subject sentinel check that gates the expensive work. See
-the SecDek convention below for a worked specialization, or one of
-three patterns lower in this doc.
+"Reference shapes" below for three concrete sentinel patterns, or
+"Patterns" lower in the doc.
 
-This doc exists because SecDek (the first production-scale consumer)
-fell into the anti-pattern across every batch phase, the cost
-compounded as the corpus grew, and the failure mode (timeouts on
-60-min jobs that should have run in 30 sec) was severe enough to
-warrant a written warning to future consumers — including a future
-version of yourself.
+This doc exists because the first production-scale consumer fell
+into the anti-pattern across every batch phase, the cost compounded
+as the corpus grew, and the failure mode (timeouts on 60-minute
+jobs that should have run in 30 seconds) was severe enough to
+warrant a written warning to future consumers.
 
-## Reference implementations (the simplest pattern)
+## Reference shapes (the simplest pattern)
 
 Before reaching for watermarks or any new abstraction, look at how
 existing working binaries in your codebase handle this. Most
 incremental-processing problems have a three-line answer.
 
-SecDek's `docs/INGEST_CONVENTION.md` formalizes this in one
-sentence: **every binary skips work for subjects it has already
-processed, by checking for a per-subject sentinel before doing the
-expensive work.** Three working SecDek binaries match this shape:
+The convention in one sentence: **every binary skips work for
+subjects it has already processed, by checking for a per-subject
+sentinel before doing the expensive work.** Three working shapes
+that map onto common ingest needs:
 
-| binary | sentinel | check |
+| shape | sentinel | check |
 |---|---|---|
-| `cmd/ingest` | quadstore: any quad with the letter's subject | `letterExists(ctx, d, subj)` |
-| `cmd/correspondence-extract` | filesystem: `extracted.json` + schema version | per-filing `os.Stat` + version compare |
-| `cmd/correspondence-ocr` | filesystem: per-image engine sentinel | per-image `os.Stat` |
+| Quad ingest (data lands in the store) | quadstore: any quad with the subject exists | `subjectExists(ctx, store, subj)` |
+| Per-document extraction (data lands on disk) | filesystem: `extracted.json` + schema version | per-document `os.Stat` + version compare |
+| Per-image OCR (data lands on disk, engine-tagged) | filesystem: per-image engine sentinel | per-image `os.Stat` |
 
 If your data is in the quadstore, the sentinel is "any quad with
 this subject exists" or "this specific predicate exists for this
@@ -258,8 +257,8 @@ the *processing* work, not the *scan* work.
 
 When it's defensible: as a transitional patch on top of a
 rebuild-from-scratch shape, while you're building the watermark
-version. SecDek shipped this as a band-aid on 2026-05-05 with the
-plan to retire it after watermark conversion.
+version. Real-world deployments have shipped this as a band-aid
+with a plan to retire it after watermark conversion.
 
 ### Diff against a hashed checksum of all inputs
 
@@ -381,10 +380,9 @@ This document is part of the convention-level fix.
   complementary: a partitioned corpus + per-subject sentinel
   pipeline gets you to "tick runs in seconds regardless of
   total-corpus size."
-- `~/secdek/docs/INGEST_CONVENTION.md` — the in-repo specialization
-  for SecDek. Names the three reference binaries and the
-  anti-pattern in one page. Required reading before writing a new
-  ingest binary in that repo.
-- `~/secdek/docs/INGEST_AUDIT.md` — per-binary compliance tracker
-  for the convention above. Worked example of how to keep the
-  pattern from drifting once it's established.
+- An in-repo `INGEST_CONVENTION.md` (or equivalent name) is the
+  recommended local specialization: name your reference binaries,
+  declare the per-binary sentinel, and audit drift periodically.
+  Worked examples in production live behind closed-source repos
+  and aren't linkable from here, but the shape generalizes —
+  see "Reference shapes" above.

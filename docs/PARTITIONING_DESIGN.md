@@ -377,7 +377,9 @@ If approved:
 4. Update `README.md` with a Partitioning section.
 5. Bump `CHANGELOG.md`. No version-tag bump needed (additive).
 
-First consumer: SecDek. Migration plan in `~/secdek/docs/PARTITION_MIGRATION_PLAN.md`.
+First consumer: a closed-source production deployment. Migration
+mechanics, deployment-specific routing tables, and the per-product
+rollback plan are out-of-tree.
 
 ## Decisions (locked 2026-05-05)
 

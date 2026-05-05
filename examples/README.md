@@ -35,9 +35,9 @@ go run ./examples/multi-tenant
 - A "graph algorithm" example. Pattern matching is what we do; PageRank
   / shortest-path / community detection live downstream of this layer.
 
-If you want to see a production-shaped consumer, look at how
-[SecDek](https://sfy.io) uses quadstore — particularly its
-`internal/db/` wrappers around `Reader` / `Writer` / `BulkLoader` and
-its in-repo `INGEST_CONVENTION.md` for sentinel-driven incremental
-ingest patterns. That's the "what does this look like at scale"
-companion to the examples here.
+For production-shaped patterns (sentinel-driven incremental ingest,
+typed wrappers around Reader / Writer / BulkLoader, label-namespace
+discipline), see [`docs/INCREMENTAL_PROCESSING.md`](../docs/INCREMENTAL_PROCESSING.md).
+Examples in this directory deliberately stay minimal so the API
+shape is clear; the patterns doc covers what you actually do at
+scale.
