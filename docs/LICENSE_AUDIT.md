@@ -39,9 +39,17 @@ inventory + the contingency plan in `CONTINGENCY.md`.
 
 ### Pebble itself
 
-| Module | Version | License | Source |
-|---|---|---|---|
-| `github.com/cockroachdb/pebble/v2` | v2.1.5 | BSD-3-Clause (LevelDB-Go Authors lineage) | [LICENSE](https://github.com/cockroachdb/pebble/blob/master/LICENSE) |
+| Module | Version | Pinned SHA | License | Source |
+|---|---|---|---|---|
+| `github.com/cockroachdb/pebble/v2` | v2.1.5 | `36a5551312e40777b3afff9846796aaadca5f877` | BSD-3-Clause (LevelDB-Go Authors lineage) | [LICENSE](https://github.com/cockroachdb/pebble/blob/master/LICENSE) |
+
+The SHA above is the freeze point referenced by
+[`scripts/fork-pebble-on-trigger.sh`](../scripts/fork-pebble-on-trigger.sh)
+— if Cockroach Labs ever relicenses Pebble, that script clones this
+exact commit and proves quadstore builds + tests pass against the
+fork before we publish anything. **Verified end-to-end on 2026-05-05;**
+mitigation is real, not hypothetical. See
+[`CONTINGENCY.md`](./CONTINGENCY.md) for the full procedure.
 
 ### Cockroach Labs auxiliary libraries
 
@@ -105,5 +113,6 @@ plan in `CONTINGENCY.md` before merging any further upgrade.
 | Date | Outcome | Notes |
 |---|---|---|
 | 2026-05-05 | clean | Initial audit — all 8 Pebble-related deps verified Apache 2.0 / BSD-3 |
+| 2026-05-05 | drill | Ran `scripts/fork-pebble-on-trigger.sh` end-to-end as a mitigation drill: cloned pebble@36a5551 locally, retargeted go.mod, ran tests against the fork, all green. Reverted clean. No quadstore code changes needed. |
 
 Append a row on every quarterly recheck. If something moves, escalate.

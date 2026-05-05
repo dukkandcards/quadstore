@@ -15,40 +15,61 @@ mitigation procedure if any item there changes license.
 ## Pebble (`github.com/cockroachdb/pebble/v2`) relicenses
 
 The most significant single dependency. Apache-2.0 today; pinned at
-v2.1.5 in `go.mod`. If a future v2.x.0 ships under a non-permissive
-license:
+v2.1.5 (SHA `36a5551312e40777b3afff9846796aaadca5f877`) in `go.sum`.
 
-1. **Don't upgrade.** v2.1.5's `go.sum` checksum is in our committed
-   `go.sum`, so any moved tag fails verification automatically.
-   Refusing the upgrade buys us time.
+**Mitigation is automated.** Run:
 
-2. **Fork the last Apache commit** to `github.com/dukkandcards/pebble`.
-   Pebble is Apache-2.0 — every commit through the relicense
-   announcement is permanently usable under Apache terms. The
-   in-flight commit is the one we keep. Apply the fork-on-trigger
-   when the announcement happens; not before.
+```
+./scripts/fork-pebble-on-trigger.sh
+```
 
-3. **Retarget `go.mod`** with a `replace` directive:
-   ```
-   replace github.com/cockroachdb/pebble/v2 => github.com/dukkandcards/pebble/v2 vX.Y.Z
-   ```
-   Run `go mod tidy`; commit. No quadstore code changes — `pebbleq`
-   talks to the same Pebble API; the fork preserves it.
+What that script does:
 
-4. **Drop or carve out non-essential CRL libraries.** Pebble's runtime
-   path uses `cockroachdb/errors`, `redact`, `swiss`, `crlib`,
-   `logtags`, `tokenbucket`. If any of those also relicenses, they're
-   smaller and simpler to fork or replace with stdlib + small
-   in-tree shims. Most of them are <1k lines.
+1. Clones `cockroachdb/pebble` at the pinned SHA into
+   `~/quadstore-pebble-fork`. Refuses to proceed if upstream's tag
+   has been moved — the SHA mismatch alarm catches that case.
+2. Verifies the LICENSE file at that commit is still permissive
+   (matches `LevelDB-Go` / `Apache` / `BSD`) before going further.
+3. Adds a `replace github.com/cockroachdb/pebble/v2 => $WORK_DIR`
+   directive to quadstore's `go.mod` and runs `go mod tidy`.
+4. Runs `go test -run "Pebble|Crash|Migrate|Property" ./...` to
+   confirm quadstore builds + tests pass against the fork.
+5. Prints the operator-action steps — pushing the local clone to
+   `github.com/dukkandcards/pebble`, swapping the replace target
+   to the GitHub fork, updating docs.
 
-5. **Communicate.** Update `LICENSE_AUDIT.md`'s recheck log, bump
-   quadstore's CHANGELOG with the fork rationale, and announce in
-   the README. Anyone using quadstore via `OpenPebble` should know.
+**Verified end-to-end on 2026-05-05.** The script ran clean, all
+Pebble-related tests passed against the local fork, no quadstore
+code changes were needed. Mitigation is real, not hypothetical.
 
-The upstream-fork interface boundary is already clean: quadstore's
-public API is `Reader` / `Writer` / `Batch`. Pebble lives entirely
-behind `internal/pebbleq`. The fork swap touches `go.mod` and
-nothing else in quadstore's public surface.
+It's safe to run as a drill any time. The drill exits with the
+revert command at the bottom.
+
+The non-`go.mod` work after the script — pushing the fork to
+GitHub, retargeting the replace, updating CHANGELOG + README —
+is operator action, not automation. The fork-to-GitHub step is
+deliberately manual so we don't inadvertently publish a fork
+during a drill.
+
+Why this works: quadstore's public API is `Reader` / `Writer` /
+`Batch`. Pebble lives entirely behind `internal/pebbleq`. The
+fork swap touches `go.mod` and nothing else in quadstore's
+public surface. quadstore's tests are sufficient because the
+`pebbleq` adapter is the only Pebble caller.
+
+### Auxiliary library co-relicense
+
+Pebble's runtime path uses `cockroachdb/errors`, `redact`, `swiss`,
+`crlib`, `logtags`, `tokenbucket`. Each is small (<1k lines mostly)
+and individually replaceable. If any of these also relicenses, the
+right move is usually to fork **Pebble** at a commit before its
+go.mod required the relicensed auxiliary, then pin from there.
+Pebble's git history gives us this option for free.
+
+If only one auxiliary relicenses and Pebble keeps using a
+not-yet-relicensed version, we may not need to fork at all —
+just pin the auxiliary at its last permissive version and rely on
+go.sum's checksum.
 
 ## Cockroach Labs auxiliary library relicenses
 
