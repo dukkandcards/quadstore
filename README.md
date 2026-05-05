@@ -5,106 +5,74 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Go 1.25+](https://img.shields.io/badge/go-1.25%2B-blue.svg)](https://go.dev)
 
-**A small graph database for Go applications.** Pure Go, single-node, embedded in your binary, backed by SQLite. No CGo. No server. No cluster. No query language. `import` it, get a `Store`, write quads, read them back.
+*Graph with a purpose.*
 
-```
+Here's what I kept hitting.
+
+I had a graph. A real one — entities and relationships, the shape was right, a relational schema would have been the wrong tool. I started on a triple-store. `(subject, predicate, object)`. Fine for two weeks.
+
+Then the questions started.
+
+*Where did this fact come from?* Couldn't tell. Every quad lived in the same anonymous pile. I bolted on a `source` column. Tried to keep it in sync. Drifted within a month.
+
+*Whose data is this?* Multi-tenancy on a triple-store is row-by-row glue. Every read needs an extra clause. Every write has to remember to set it. Every "delete this customer" turns into a query plan I don't trust.
+
+*Can I throw away the derived stuff and rebuild?* Not without taking source data with it. Once derived facts mingled with sources in the same table, the rebuild stopped being safe.
+
+*Who wrote this row, and when?* Audit. Always last on the list, always urgent the day someone asks.
+
+I started writing the same code into every project. Same provenance columns. Same tenant scoping. Same regeneration scripts that didn't quite work. After the third project, I stopped pretending and built the thing I wanted.
+
+quadstore is that thing.
+
+```sh
 go get github.com/dukkandcards/quadstore
 ```
 
-## Status
-
-`v0.1.x`. API is stabilizing. Pure Go (no CGo) — `go build` is enough; cross-compilation to `linux/arm64` from `darwin/arm64` works without a toolchain. Used in production by [SecDek](https://sfy.io) on a 28 GB graph, ~10K quads/sec sustained ingest, sub-millisecond point lookups. Breaking changes are possible before `v1.0.0`; CHANGELOG calls them out explicitly.
-
-quadstore deliberately doesn't shard. If you need a graph distributed across machines, use [Dgraph](https://github.com/dgraph-io/dgraph) or [JanusGraph](https://janusgraph.org/). If your graph fits on one machine — and most do — quadstore is for you.
-
-## What you get (idiomatic Go)
-
-- A `Store` you `Open` like a SQLite database.
-- A `Writer` that takes typed `Batch` writes with namespace-enforced labels.
-- A `Reader` that returns `iter.Seq2[Quad, error]` for pattern matches — Go 1.23+ range-over-func.
-- A `BulkLoader` for ingest paths, sized for SQLite's `SQLITE_MAX_VARIABLE_NUMBER` ceiling.
-- Optional `OpenPartitioned` to split fact families across SQLite files behind one Reader/Writer interface.
-- A `Migrate` / `MigrateFromSnapshot` pair for moving data between Stores without holding the source DB at write-locking risk.
-
-Everything is pure Go — `modernc.org/sqlite` is the only DB dependency and it's a Go-native SQLite, no `libsqlite3` shared object required. No CGo means no toolchain headaches, no surprise platform breakage on `linux/arm64` Lambda or distroless containers, and `go install` Just Works.
-
-## Why the fourth field matters
-
-Triple-stores give you `(subject, predicate, object)`. That's fine for a weekend project and rots the moment a real product grows on top of it — every fact ends up mixed together with no record of where it came from or who it belongs to.
-
-quadstore adds a **label** and enforces a namespace at write time. `Writer.Commit` rejects any quad whose label is not prefixed with one of:
-
-| prefix | meaning |
-|---|---|
-| `source:*` | raw external data; immutable in principle |
-| `derived:*` | computed from source; deletable + regenerable as a unit |
-| `human:{tenant-id}/*` | per-tenant markup; multi-tenancy in the storage, not bolted on |
-| `meta:*` | system state — sessions, schema versions, ingest bookkeeping |
-
-Every row knows where it came from and whose it is, because the database refuses to accept rows that don't. This single property turns out to make a *lot* of normally-hard things easy: tenant deletion, derivation regeneration, audit trails, schema migration.
-
-## A minimal example
-
 ```go
-package main
+import "github.com/dukkandcards/quadstore"
 
-import (
-    "context"
-    "log"
+store, _ := quadstore.Open("graph.db")
+defer store.Close()
 
-    "github.com/dukkandcards/quadstore"
-)
+w, _ := store.Writer(ctx)
+w.Commit(ctx, quadstore.Batch{
+    Label: "source:hr-feed",
+    Adds: []quadstore.Quad{
+        {Subject: "person:alice", Predicate: "works-at",   Object: "org:acme"},
+        {Subject: "person:alice", Predicate: "reports-to", Object: "person:bob"},
+    },
+})
 
-func main() {
-    store, err := quadstore.Open("graph.db")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer store.Close()
-
-    ctx := context.Background()
-
-    // Write
-    w, err := store.Writer(ctx)
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer w.Close()
-    err = w.Commit(ctx, quadstore.Batch{
-        Label: "source:hr-feed",
-        Adds: []quadstore.Quad{
-            {Subject: "person:alice", Predicate: "works-at",   Object: "org:acme"},
-            {Subject: "person:alice", Predicate: "reports-to", Object: "person:bob"},
-        },
-        Metadata: map[string]string{
-            quadstore.MetaActor:  "import-2026-05-05",
-            quadstore.MetaSource: "hr-feed-v3",
-        },
-    })
-    if err != nil {
-        log.Fatal(err) // rejected if any label lacks a namespace prefix
-    }
-
-    // Read
-    r := store.Reader()
-    for q, err := range r.Find(ctx, quadstore.Pattern{
-        Subject:   "person:alice",
-        Predicate: "reports-to",
-    }) {
-        if err != nil {
-            log.Fatal(err)
-        }
-        log.Printf("alice reports to %s (%s)", q.Object, q.Label)
-    }
+r := store.Reader()
+for q, _ := range r.Find(ctx, quadstore.Pattern{Subject: "person:alice"}) {
+    fmt.Println(q.Predicate, q.Object, "from", q.Label)
 }
 ```
 
-See [`examples/`](./examples) for runnable programs:
-- [`examples/minimal`](./examples/minimal) — open, write, read in one file.
-- [`examples/audit-log`](./examples/audit-log) — append-only event log with provenance metadata.
-- [`examples/multi-tenant`](./examples/multi-tenant) — `human:{tenant}/...` labels as the security boundary.
+## The fix is the fourth field
 
-## Comparison
+quadstore adds a label, and the writer rejects any quad whose label is missing or doesn't begin with one of:
+
+- `source:*` — raw external data; immutable in principle
+- `derived:*` — computed from source; deletable and regenerable as a unit
+- `human:{tenant}/*` — per-tenant markup; multi-tenancy in the storage, not bolted on
+- `meta:*` — system state, ingest bookkeeping, schema versions
+
+The questions that used to leak into every project answer themselves now:
+
+*Where did this come from?* The label says, the commit knows.
+*Whose is it?* The tenant is in the label.
+*Can I rebuild derivations?* Drop `derived:*`, rebuild from `source:*`.
+*Who wrote this and when?* The commit recorded actor and source.
+
+The database refuses to accept rows that don't carry their own provenance, and that single rule makes the rest fall out for free.
+
+## Is this for you
+
+If your graph fits on one machine, your writes go through Go code you control, and you would rather ship a binary than run a server — this is the kind of tool I would hand you.
+
+If you need a query language an analyst can run, sharding across machines, or built-in graph algorithms (PageRank, shortest-path, community detection) — this isn't it. [Dgraph](https://github.com/dgraph-io/dgraph) is the right answer for clusters. [Cayley](https://github.com/cayleygraph/cayley) was the project that showed an embedded graph store could live as a library; it's been unmaintained since 2024.
 
 | | quadstore | [Cayley](https://github.com/cayleygraph/cayley) | [Dgraph](https://github.com/dgraph-io/dgraph) | raw SQLite |
 |---|---|---|---|---|
@@ -118,69 +86,27 @@ See [`examples/`](./examples) for runnable programs:
 | **Pure Go** | yes (modernc.org/sqlite) | yes | yes | depends on driver |
 | **License** | MIT | Apache-2.0 | Apache-2.0 (Community) | Public domain |
 
-If you're choosing between these, the practical question is: do you need to scale beyond one machine? If yes, Dgraph. If no, quadstore is built for you. Cayley is the spiritual ancestor of this project — generalized across backends and query languages — but is unmaintained as of 2024.
+## The other things that mattered
 
-## Partitioning (when one file isn't enough)
+**Pure Go.** `modernc.org/sqlite` is a Go-native SQLite — no `libsqlite3`, no CGo, no toolchain. `go build` is enough. Cross-compiles to `linux/arm64` from `darwin/arm64` with no setup. Lambda and distroless containers work without ceremony. Most embedded SQLite stories have a CGo footnote that breaks somebody's day; this one doesn't.
 
-A single SQLite file is the right shape for most quadstore deployments. Once a Store accumulates fact families that don't share queries — say, a graph of SEC no-action letters that also ingests millions of unrelated public-comment letters — the unified `quads` table starts charging the no-action queries for B-tree pages they never read.
+**Idempotent ingest.** Real ingest pipelines retry. `INSERT OR IGNORE` means re-runs don't double-count. I have burned a weekend on this exact problem.
 
-`OpenPartitioned` places fact families in independent SQLite files behind the same Reader / Writer / Batch surface:
+**Per-fact-family partitioning when one file isn't enough.** When two fact families don't share queries, `OpenPartitioned` splits them across SQLite files behind one Reader/Writer surface. Bigger graphs without a cluster.
 
-```go
-import "strings"
+**Writes are within ~2% of hand-rolled SQLite.** [docs/PERFORMANCE.md](docs/PERFORMANCE.md) shows the side-by-side: BulkLoader running quadstore's exact schema is within 2% of what an expert hand-rolled equivalent gets on the same `modernc.org/sqlite` driver. The library overhead is the schema (four-direction index coverage so `Pattern` reads stay fast), not the Go layer.
 
-s, err := quadstore.OpenPartitioned(quadstore.PartitionedConfig{
-    Root:    "/var/lib/myapp",
-    Default: "main",
-    Partitions: []quadstore.PartitionSpec{
-        {Name: "main",   File: "main.db"},
-        {Name: "corpus", File: "corpus.db"},
-    },
-    RouteLabel: func(label string) quadstore.Partition {
-        if strings.HasPrefix(label, "source:cmt-") ||
-            strings.HasPrefix(label, "derived:cmt-") {
-            return "corpus"
-        }
-        return "main"
-    },
-})
-```
+## Where it stands
 
-Properties:
-
-- **Independent writer slots.** Two goroutines acquiring `WriterFor("main")` and `WriterFor("corpus")` run concurrently; SQLite's single-writer rule applies per file.
-- **Cross-partition batches are rejected.** Commit returns `ErrCrossPartitionBatch` when a batch's quads disagree on partition. Atomicity stops at the partition boundary; we don't pretend to give you cross-file transactions SQLite can't provide.
-- **Reads scope, then fan out.** A `Pattern` whose `Label` resolves through `RouteLabel` reads from one file. A `Pattern` with no Label fans out, merging `iter.Seq2` streams. Order across partitions is unspecified by design.
-- **Optional read scoping.** A `RoutePattern func(Pattern) Partition` callback lets the consumer scope reads by any field — subject prefix, predicate namespace, anything deterministic. The library does not guess; you encode your routing knowledge.
-- **One-time migration.** `quadstore.Migrate(ctx, src, dst, opts)` streams a single-file (or differently-partitioned) source into a partitioned destination, routing every quad / commit / commit_op through the destination's `RouteLabel`. The source is read-only throughout. `OnlySince` supports incremental top-up.
-
-When *not* to partition: if your queries naturally span the entire graph, partitioning makes them slower (fan-out cost without the scoping payoff). Partition along a real query-family boundary, or stay single-file.
-
-Full design rationale: [`docs/PARTITIONING_DESIGN.md`](docs/PARTITIONING_DESIGN.md).
-
-## What it isn't
-
-- Not a distributed graph. Single-node by design.
-- Not a query language. Go functions, not a compiler.
-- Not a database server. No port, no auth, no admin surface.
-- Not cloud-only. A filesystem is enough.
-- Not a graph-algorithm library. We give you typed pattern matching, not PageRank.
-
-## Documentation
-
-- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) — measured numbers, practical guidance, what gets slow and how to fix it.
-- [`docs/PARTITIONING_DESIGN.md`](docs/PARTITIONING_DESIGN.md) — the partition routing model and migration semantics.
-- [`docs/INCREMENTAL_PROCESSING.md`](docs/INCREMENTAL_PROCESSING.md) — patterns for ingest pipelines that don't re-derive the whole world every tick.
-- [`CHANGELOG.md`](CHANGELOG.md) — version history with breaking-change callouts.
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — small patches welcome; distributed-consensus PRs politely declined.
-- [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md) — Cayley, modernc.org/sqlite, SQLite, Go, and the projects this stands on top of.
-- [`RESEARCH.md`](RESEARCH.md) — open notes on derivation/clustering work that informs library direction.
-
-## Used in production
-
-- [**SecDek**](https://sfy.io) — graph over SEC and CFTC staff letters joined to EDGAR filings, counsel networks, partner-continuity timelines. 28 GB graph, ~10K quads/sec sustained ingest, sub-millisecond point lookups on indexed predicates.
+`v0.1.x`. API is stabilizing — breaking changes are possible before `v1.0.0` and the CHANGELOG calls them out explicitly. Running in production at [SecDek](https://sfy.io): 28 GB graph, ~10K quads/sec sustained, sub-millisecond point lookups on indexed predicates.
 
 If you ship something on quadstore, open a PR adding it here.
+
+## License
+
+MIT. No paid tier. No enterprise edition. No cloud-only product pulling features back behind a paywall.
+
+The work this stands on — Cayley, SQLite, `modernc.org/sqlite`, the Go toolchain — reached its author because someone else made it freely usable. This is MIT for the same reason: so the next person can pick it up, build on it, and keep going.
 
 ## Acknowledgements
 
@@ -190,12 +116,13 @@ quadstore is the deliberate shrink of that idea: one backend (SQLite via [`moder
 
 Thank you, Barak and Robert. We are happily here because you were there first. If you ever want to take a look at the code, open an issue, or tell us we got something wrong — we'd be honored.
 
-## A note on philosophy
+## Start here
 
-Graph databases should be ordinary. The shape is useful for a very large class of applications — anything where the hard question is *what connects to what* — and it is absurd that the current market treats "graph database" as a category that implies enterprise procurement.
-
-This project will stay MIT-licensed. No paid tier. No enterprise edition. No cloud-only offering that gates the interesting parts. If you want to run it, run it.
-
-## License
-
-[MIT](./LICENSE).
+- [`examples/minimal`](./examples/minimal) — open, write, read in one file
+- [`examples/audit-log`](./examples/audit-log) — append-only event log with provenance metadata
+- [`examples/multi-tenant`](./examples/multi-tenant) — `human:{tenant}/...` labels as the security boundary
+- [`docs/PERFORMANCE.md`](./docs/PERFORMANCE.md) — measured numbers, what gets slow, how to fix it
+- [`docs/PARTITIONING_DESIGN.md`](./docs/PARTITIONING_DESIGN.md) — partition routing model and migration semantics
+- [`docs/INCREMENTAL_PROCESSING.md`](./docs/INCREMENTAL_PROCESSING.md) — patterns for ingest pipelines that don't re-derive the whole world every tick
+- [`CHANGELOG.md`](./CHANGELOG.md) — version history with breaking-change callouts
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md) — small patches welcome; distributed-consensus PRs politely declined
