@@ -5,7 +5,10 @@ derivation / migration pipelines.
 
 **TL;DR:** if your tick reads "every quad in label X" or "every row in
 table Y," you've built a loop that processes data you already
-processed. Don't. Use one of three patterns below.
+processed. Don't. The simplest fix — and the right one in most cases —
+is a per-subject sentinel check that gates the expensive work. See
+the SecDek convention below for a worked specialization, or one of
+three patterns lower in this doc.
 
 This doc exists because SecDek (the first production-scale consumer)
 fell into the anti-pattern across every batch phase, the cost
@@ -13,6 +16,35 @@ compounded as the corpus grew, and the failure mode (timeouts on
 60-min jobs that should have run in 30 sec) was severe enough to
 warrant a written warning to future consumers — including a future
 version of yourself.
+
+## Reference implementations (the simplest pattern)
+
+Before reaching for watermarks or any new abstraction, look at how
+existing working binaries in your codebase handle this. Most
+incremental-processing problems have a three-line answer.
+
+SecDek's `docs/INGEST_CONVENTION.md` formalizes this in one
+sentence: **every binary skips work for subjects it has already
+processed, by checking for a per-subject sentinel before doing the
+expensive work.** Three working SecDek binaries match this shape:
+
+| binary | sentinel | check |
+|---|---|---|
+| `cmd/ingest` | quadstore: any quad with the letter's subject | `letterExists(ctx, d, subj)` |
+| `cmd/correspondence-extract` | filesystem: `extracted.json` + schema version | per-filing `os.Stat` + version compare |
+| `cmd/correspondence-ocr` | filesystem: per-image engine sentinel | per-image `os.Stat` |
+
+If your data is in the quadstore, the sentinel is "any quad with
+this subject exists" or "this specific predicate exists for this
+subject." If your data is on disk, the sentinel is a marker file
+with a schema version. The check goes BEFORE the expensive work,
+not after.
+
+Reach for the patterns below only when this shape can't cover your
+case. Watermarks generalize when you have many phases consuming a
+shared change-set stream and want the empty-tick cost to be three
+reads. Per-subject sentinels generalize when each subject's
+processing is independent — which is most ingest pipelines.
 
 ## The anti-pattern: "rebuild from scratch every tick"
 
@@ -287,13 +319,72 @@ flag it.
 - You explain to a colleague that "we re-fetch every day in case
   it changed." That's the moment.
 
+## Why this happens (the culture problem)
+
+You will write the "rebuild from scratch every tick" shape. So will
+every engineer who follows you. It is not a competence failure. There
+are real reasons the wrong shape gets shipped:
+
+1. **It is genuinely the easier code to author on day one.** With 100
+   subjects in the DB, re-emit + INSERT OR IGNORE produces correct
+   output in 2 seconds. The shape is robust — no state to track, no
+   watermark consistency questions, no edge cases around "what if
+   the phase failed last time." The cost ledger doesn't appear until
+   the corpus is two or three orders of magnitude bigger, by which
+   point the code is years old and "just works."
+
+2. **The library may not expose a watermark primitive at design
+   time.** Each consumer rolls its own approximation. The
+   approximation is always "scan everything." If you are designing a
+   new derivation phase against this library, the existence of a
+   watermark helper is the cheapest thing to add upfront — much
+   cheaper than retrofitting after the fact.
+
+3. **The cost is invisible until it is fatal.** A daily run that
+   takes 30 min and produces 0 net new derivations does not alarm.
+   It alarms when it takes 31 min and times out. By then the
+   redundant work has been compounding for months. Observability
+   needs a `phase_watermark_lag` metric and a `redundant_work_ratio`
+   metric (work that emitted no new quads / total work) — neither of
+   which is standard.
+
+4. **Code review against a single phase looks fine.** Reviewers ask
+   "does this produce correct output?" The answer is yes. Reviewers
+   rarely ask "is the cost O(corpus) or O(change set)?" across all
+   phases together. The anti-pattern is invisible at the per-PR
+   level; you have to look at the system shape.
+
+5. **The substrate's failure mode is silent for a while.** SQLite +
+   gp3 EBS will absorb a lot of unnecessary reads before throwing.
+   IOPS contention shows up as "things feel slow" before it shows
+   up as "things broke." Engineers route around the slowness rather
+   than diagnosing it.
+
+The institutional fix is three things, none of which is "be smarter":
+
+- **Library-level**: a watermark helper that makes the right pattern
+  cheaper to write than the wrong one. (`Store.ReadWatermark` /
+  `WriteWatermark` go a long way.)
+- **Convention-level**: the three smells in the previous section
+  become a code-review checklist item. Any phase that does
+  full-table reads in a recurring tick has to defend it.
+- **Observability-level**: a per-phase `redundant_work_ratio`
+  exposed as a metric. When the ratio crosses 0.95, the alarm fires
+  even if the run still completed successfully.
+
+This document is part of the convention-level fix.
+
 ## See also
 
 - `docs/PARTITIONING_DESIGN.md` — partitioning helps reads scope
   to one fact family. Orthogonal to incrementality but
-  complementary: a partitioned corpus + watermark pipeline is
-  what gets you to "tick runs in seconds regardless of
+  complementary: a partitioned corpus + per-subject sentinel
+  pipeline gets you to "tick runs in seconds regardless of
   total-corpus size."
-- `~/secdek/docs/INGEST_REDESIGN_PLAN.md` — the SecDek-specific
-  application of these patterns, including the staged-migration
-  approach.
+- `~/secdek/docs/INGEST_CONVENTION.md` — the in-repo specialization
+  for SecDek. Names the three reference binaries and the
+  anti-pattern in one page. Required reading before writing a new
+  ingest binary in that repo.
+- `~/secdek/docs/INGEST_AUDIT.md` — per-binary compliance tracker
+  for the convention above. Worked example of how to keep the
+  pattern from drifting once it's established.
