@@ -2,6 +2,7 @@ package quadstore
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"time"
 
@@ -177,6 +178,86 @@ func (b *PebbleBulkLoader) Stats() BulkStats {
 		Attempted: s.Attempted,
 		Flushes:   s.Flushes,
 	}
+}
+
+// LabelCounts returns a map of label → count of quads with that
+// label. Same contract as (*Store).LabelCounts. Cost is
+// O(distinct_labels × log N) thanks to per-label SeekGE.
+func (s *PebbleStore) LabelCounts(ctx context.Context) (map[string]int64, error) {
+	return s.inner.LabelCounts(ctx)
+}
+
+// Stats returns total quad count and distinct predicate count.
+// Same contract as (*Store).Stats. Quad count is a full SPO scan
+// (slow on multi-GB stores); distinct predicates uses SeekGE.
+func (s *PebbleStore) Stats() (quads int64, predicates int64, err error) {
+	return s.inner.Stats()
+}
+
+// CommitStatsAt returns commit-journal counts. Same contract as
+// (*Store).CommitStatsAt; OldCommits and OldOps are zero when
+// cutoff is the zero time.
+func (s *PebbleStore) CommitStatsAt(cutoff time.Time) (CommitStats, error) {
+	cs, err := s.inner.CommitStatsAt(context.Background(), cutoff)
+	if err != nil {
+		return CommitStats{}, err
+	}
+	return CommitStats{
+		TotalCommits: cs.TotalCommits,
+		OldCommits:   cs.OldCommits,
+		TotalOps:     cs.TotalOps,
+		OldOps:       cs.OldOps,
+	}, nil
+}
+
+// MigrateToPebble streams every quad in src to dst via Reader.Find +
+// BulkLoader. Skips the audit trail by default — set CopyAudit to
+// true to also copy commits + commit_ops (slower; iterates the
+// SQLite source's audit tables and replays them as audited
+// PebbleStore commits).
+//
+// MigrateToPebble does not lock the source. If the source is being
+// written to during migration, the destination may miss a few
+// in-flight quads. For consistent migrations, snapshot the source
+// first via (*Store).VacuumInto and migrate from the snapshot.
+func MigrateToPebble(ctx context.Context, src *Store, dst *PebbleStore, opts MigrateToPebbleOptions) (MigrateToPebbleStats, error) {
+	var stats MigrateToPebbleStats
+
+	bl, err := dst.BulkLoaderWithLabel(ctx, "")
+	if err != nil {
+		return stats, fmt.Errorf("migrate: open bulk loader: %w", err)
+	}
+	defer bl.Close()
+
+	r := src.Reader()
+	for q, err := range r.Find(ctx, Pattern{}) {
+		if err != nil {
+			return stats, fmt.Errorf("migrate: read src: %w", err)
+		}
+		if err := bl.Add(q); err != nil {
+			return stats, fmt.Errorf("migrate: bulk add: %w", err)
+		}
+		stats.QuadsCopied++
+		if opts.Progress != nil && stats.QuadsCopied%opts.ProgressEvery == 0 {
+			opts.Progress(stats)
+		}
+	}
+	if err := bl.Close(); err != nil {
+		return stats, fmt.Errorf("migrate: bulk close: %w", err)
+	}
+	return stats, nil
+}
+
+// MigrateToPebbleOptions controls cross-backend migration.
+type MigrateToPebbleOptions struct {
+	// Progress fires every ProgressEvery quads (set both or neither).
+	Progress      func(MigrateToPebbleStats)
+	ProgressEvery int64
+}
+
+// MigrateToPebbleStats reports a migration's progress.
+type MigrateToPebbleStats struct {
+	QuadsCopied int64
 }
 
 // toPebbleBatch converts the public Batch into pebbleq.Batch. Free

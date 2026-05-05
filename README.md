@@ -96,7 +96,7 @@ If you need a query language an analyst can run, sharding across machines, or bu
 
 **Writes are within ~2% of hand-rolled SQLite.** [docs/PERFORMANCE.md](docs/PERFORMANCE.md) shows the side-by-side: BulkLoader running quadstore's exact schema is within 2% of what an expert hand-rolled equivalent gets on the same `modernc.org/sqlite` driver. The library overhead is the schema (four-direction index coverage so `Pattern` reads stay fast), not the Go layer.
 
-**Optional Pebble backend (v0.2-track, opt-in).** `quadstore.OpenPebble(path)` returns a Pebble-backed Store with the same Writer / Reader / BulkLoader surface. On M1 Pro: single-quad commit 18× faster (5.95 µs vs 107 µs), 1k-batch 2.1× faster, subject lookup 3× faster, 100k bulk load 2.5× faster. Trades ~20 transitive deps for the wins; SQLite stays the default. See [`docs/PEBBLE_VS_SQLITE.md`](docs/PEBBLE_VS_SQLITE.md).
+**Optional Pebble backend (v0.2-track, opt-in).** `quadstore.OpenPebble(path)` returns a Pebble-backed Store with the same Writer / Reader / BulkLoader / LabelCounts / Stats / CommitStatsAt surface. Cross-backend migration via `quadstore.MigrateToPebble(ctx, src, dst, opts)`. Production-class numbers on AWS `t4g.large` / gp3 EBS: single-quad commit **40× faster** (9.6 µs vs 384 µs), 1k-batch 4.5× faster, 100k bulk load 5.5× faster. The slow-fsync cloud disk *widens* Pebble's lead vs M1. Trades ~20 transitive deps for the wins; SQLite-backed `Open(path)` stays the default. See [`docs/PEBBLE_VS_SQLITE.md`](docs/PEBBLE_VS_SQLITE.md).
 
 ## Where it stands
 

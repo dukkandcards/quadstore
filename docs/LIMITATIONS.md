@@ -4,11 +4,16 @@ This is the list of every known way quadstore is worse than what you might have 
 
 If you hit a limitation we haven't listed here, that's a bug in this doc — please open an issue.
 
+> **Note:** items marked **[Pebble: ...]** are resolved on the
+> opt-in Pebble backend (`quadstore.OpenPebble`). The default
+> SQLite-backed `quadstore.Open` keeps its current behavior. See
+> [`PEBBLE_VS_SQLITE.md`](./PEBBLE_VS_SQLITE.md) for measured deltas.
+
 ## Hard constraints (will not change)
 
 These follow from the embedded-Go / single-machine / SQLite-backed design. They are the price of the rest of the library being small.
 
-- **One writer per partition at a time.** SQLite serializes writes per database file. `modernc.org/sqlite` is a pure-Go port that does not work around this. Two goroutines opening `WriterFor` against the same partition will block; against different partitions they run independently.
+- **One writer per partition at a time.** SQLite serializes writes per database file. `modernc.org/sqlite` is a pure-Go port that does not work around this. Two goroutines opening `WriterFor` against the same partition will block; against different partitions they run independently. **[Pebble: lifted — Pebble has no single-writer ceiling; concurrent Writers run in parallel via WriteBatch + WAL append.]**
 - **No distribution, no sharding, no replication.** quadstore runs in one process against one filesystem. If you need writes coordinated across machines, this is the wrong tool. Use [Dgraph](https://github.com/dgraph-io/dgraph).
 - **No query language.** Reads are Go functions: `Pattern`, `Find`, `Count`, `Match`, `Shape`, `Path`. There is no Cypher, no Gizmo, no GraphQL endpoint. We will not add one.
 - **No graph algorithms.** No PageRank, no shortest-path, no community detection, no centrality measures. quadstore stores quads and lets you iterate over them. Anything algorithmic is your code.
@@ -20,17 +25,17 @@ These follow from the embedded-Go / single-machine / SQLite-backed design. They 
 All numbers are M1 Pro / darwin-arm64, `modernc.org/sqlite`, default PRAGMAs (`WAL` + `synchronous=NORMAL`). Reproduce with `go test -bench=. -benchtime=2s ./...`. Full breakdown in [`docs/PERFORMANCE.md`](./PERFORMANCE.md).
 
 - **Bulk write floor: ~7.5 µs/quad** (~135K quads/sec sustained, flat across N=1k…100k). The library overhead vs hand-rolled SQLite at the same schema is **~2%**. The 2× vs the simple raw schema is the cost of the four secondary indexes that make `Pattern` reads fast in any direction. You can't have both.
-- **Single-quad `Writer.Commit`: ~108 µs audited, ~60 µs with `Batch.NoAudit: true`.** The audit cost is the `commits` + `commit_ops` rows — the primary reason `Writer.Commit` is slower than raw `INSERT`. If you don't need the audit trail, set `Batch.NoAudit: true` and pay ~2.4× raw modernc/sqlite single-INSERT cost. If you do need it, batch your `Adds` into a single `Commit` call to amortize the audit overhead.
+- **Single-quad `Writer.Commit`: ~108 µs audited, ~60 µs with `Batch.NoAudit: true`.** The audit cost is the `commits` + `commit_ops` rows — the primary reason `Writer.Commit` is slower than raw `INSERT`. If you don't need the audit trail, set `Batch.NoAudit: true` and pay ~2.4× raw modernc/sqlite single-INSERT cost. If you do need it, batch your `Adds` into a single `Commit` call to amortize the audit overhead. **[Pebble: ~5.95 µs on M1 / ~9.6 µs on Linux — 18-40× faster than SQLite at the same audit semantics.]**
 - **Subject lookup: ~69 µs** for ~100 returned rows. Non-subject reads (predicate-only, object-only, label-only) walk a different index and pay for the secondary B-trees they're routed through.
 - **Storage: ~444 bytes/quad** measured on a 133M-quad / 60 GB SecDek-class corpus. Subjects, predicates, objects, and labels are all stored as `TEXT` verbatim. No string interning, no predicate dictionary, no value compression. If the corpus has high predicate cardinality and short string values, expect to pay 4-5× what a column-encoded triple store would.
-- **BulkLoader index rebuild on `Close` dominates large loads.** At 100k rows it's ~22% of total bulk-load time per CPU profile; at 100M+ rows the rebuild can run for tens of minutes. We rebuild three secondary indexes (`idx_pos`, `idx_osp`, `idx_lsp`) in series — there's no parallel-build path in `modernc/sqlite`.
+- **BulkLoader index rebuild on `Close` dominates large loads.** At 100k rows it's ~22% of total bulk-load time per CPU profile; at 100M+ rows the rebuild can run for tens of minutes. We rebuild three secondary indexes (`idx_pos`, `idx_osp`, `idx_lsp`) in series — there's no parallel-build path in `modernc/sqlite`. **[Pebble: lifted — sstables are sorted on write; no rebuild step exists.]**
 - **`OpenPartitioned` reads fan out by default.** A `Pattern` with no `Label` and no `RoutePattern` callback queries every partition and merges the resulting iterators. Order across partitions is unspecified; per-partition order is sorted. Cross-partition reads are linear in the number of partitions.
 
 ## Sharp edges (you will hit these)
 
 These are the operational gotchas we've watched real users (us) walk into. None are bugs; all are surprising the first time.
 
-- **`BulkLoader` holds the writer slot for its entire lifetime.** From `BulkLoader(ctx)` to `Close()`, no other Writer or BulkLoader on that partition can make progress. A long load (30+ minutes on multi-million-row corpora) blocks every other writer until done. If you need concurrent writes during a long load, partition the corpus across files and route differently-prefixed labels to separate partitions.
+- **`BulkLoader` holds the writer slot for its entire lifetime.** From `BulkLoader(ctx)` to `Close()`, no other Writer or BulkLoader on that partition can make progress. A long load (30+ minutes on multi-million-row corpora) blocks every other writer until done. If you need concurrent writes during a long load, partition the corpus across files and route differently-prefixed labels to separate partitions. **[Pebble: lifted — no writer slot.]**
 - **`BulkLoader` flips PRAGMAs and restores them on `Close`.** During a load: `synchronous=OFF`, `journal_mode=MEMORY`, `cache_size=-2000000` (2 GB), `temp_store=MEMORY`. A crash mid-load loses the in-flight pages but the file remains openable. The implication: **don't run a `BulkLoader` against a database you also need to query under WAL semantics in the same process** — readers may see inconsistent state during the load. Restart the process or wait for `Close` before resuming queries.
 - **Cross-partition `Batch` writes are rejected.** A `Writer.Commit` whose `Adds` route to two different partitions returns `ErrCrossPartitionBatch`. The library does not pretend SQLite can give you a multi-file transaction. Caller splits by partition and commits each separately.
 - **`Migrate` to N partitions allocates ~2 GB SQLite page cache per destination.** A 2-destination migration of a 28 GB source observed ~7.4 GB peak RSS in production. This is not a memory leak; it's the BulkLoader's `cache_size = -2000000` PRAGMA times the number of destinations open simultaneously. **There is currently no knob to lower this.** Run migrations on hosts with at least 8 GB free per destination partition.

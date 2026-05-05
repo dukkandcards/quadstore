@@ -35,10 +35,34 @@
 Full breakdown including durability semantics: see
 [`docs/PEBBLE_VS_SQLITE.md`](./docs/PEBBLE_VS_SQLITE.md).
 
-### What's not yet in `*PebbleStore`
+### What's now in `*PebbleStore`
+- Higher-level helpers: `LabelCounts`, `Stats`, `CommitStatsAt`.
+  Same return contracts as the SQLite versions; cost shapes differ
+  (SeekGE-driven traversals vs SQL aggregates) but both are O(N) at
+  worst and faster on the per-label / per-predicate paths.
+- Cross-backend migration: `quadstore.MigrateToPebble(ctx, src,
+  dst, opts)` streams a SQLite-backed `*Store` into a
+  `*PebbleStore` via `Reader.Find` + `BulkLoader`. Audit trail is
+  not copied in v0.2 (the source's commit log stays on the SQLite
+  side; the destination's audit starts fresh).
+
+### What's still NOT in `*PebbleStore`
 - Partitioning (single Pebble dir per Store).
-- Match / Path / Stats / CommitStats / LabelCounts / Migrate.
-- These remain SQLite-only until ported.
+- `Match` (legacy `*Iterator` API — use `Reader.Find` with `iter.Seq2` instead).
+- `Path` traversal helpers (`From` / `Out` / `In` / `Has` / `Unique`).
+- These will be ported when there's a concrete user request.
+
+### Cloud Linux confirms M1 result and amplifies it
+- Re-ran the same bench suite on a fresh AWS `t4g.large` (gp3 EBS,
+  Ubuntu 24.04 ARM64). The slow-fsync cloud disk widened most
+  Pebble wins:
+  - Single-quad commit: M1 18× → Linux **40× faster**.
+  - 1k batch: M1 2.1× → Linux **4.5× faster**.
+  - Bulk load 100k: M1 2.5× → Linux **5.5× faster**.
+  - The "Pebble loses small-N bulk loads" footnote on M1 disappears
+    on real disks: at N=1k Pebble is now within 13% of SQLite, and
+    by N=10k it's 3× faster.
+- Raw bench output archived at `docs/bench-output/linux-t4g-large-2026-05-05.txt`.
 
 ### Dependency cost
 - Pebble pulls in ~20 transitive packages (CockroachDB redact,

@@ -646,3 +646,212 @@ func (b *BulkLoader) Close() error {
 
 // Stats returns a snapshot of the loader's progress.
 func (b *BulkLoader) Stats() BulkStats { return b.stats }
+
+// ============================================================
+// Higher-level helpers (LabelCounts / Stats / CommitStats)
+// ============================================================
+
+// LabelCounts returns the count of quads per label across the
+// store. Iterates the LSP keyspace and uses SeekGE to skip past
+// each label after counting it, so cost is O(distinct_labels ×
+// log N) — fast even on large stores.
+func (s *Store) LabelCounts(_ context.Context) (map[string]int64, error) {
+	out := make(map[string]int64)
+	it, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte{prefLSP},
+		UpperBound: []byte{prefLSP + 1},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer it.Close()
+
+	for ok := it.First(); ok; {
+		// Key layout: 'l' | label | 0x00 | subject | 0x00 | predicate | 0x00 | object
+		key := it.Key()
+		// Find the first NUL after the prefix byte.
+		labelEnd := bytes.IndexByte(key[1:], sep)
+		if labelEnd < 0 {
+			ok = it.Next()
+			continue
+		}
+		label := string(key[1 : 1+labelEnd])
+		// Count entries for this label by sub-scanning until the
+		// label changes. Use SeekGE to jump past once we know the
+		// label boundary.
+		labelPrefix := key[:1+labelEnd+1] // 'l' | label | sep
+		labelUpper := upperBoundForPrefix(labelPrefix)
+
+		// Sub-iterator on this label.
+		subIt, err := s.db.NewIter(&pebble.IterOptions{
+			LowerBound: labelPrefix,
+			UpperBound: labelUpper,
+		})
+		if err != nil {
+			return nil, err
+		}
+		var n int64
+		for sok := subIt.First(); sok; sok = subIt.Next() {
+			n++
+		}
+		subIt.Close()
+		out[label] = n
+
+		// Outer iter: jump past this label's range.
+		ok = it.SeekGE(labelUpper)
+	}
+	if err := it.Error(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Stats returns total quad count and number of distinct predicates.
+// Quad count is one full SPO scan (could be optimized via an
+// approximation, but matches the SQLite contract). Distinct
+// predicates uses SeekGE on the POS keyspace to skip past each
+// predicate after seeing it once — O(distinct_predicates × log N).
+func (s *Store) Stats() (quads int64, predicates int64, err error) {
+	// Quad count: scan SPO.
+	{
+		it, ierr := s.db.NewIter(&pebble.IterOptions{
+			LowerBound: []byte{prefSPO},
+			UpperBound: []byte{prefSPO + 1},
+		})
+		if ierr != nil {
+			return 0, 0, ierr
+		}
+		for ok := it.First(); ok; ok = it.Next() {
+			quads++
+		}
+		if e := it.Error(); e != nil {
+			it.Close()
+			return 0, 0, e
+		}
+		it.Close()
+	}
+	// Distinct predicates: scan POS, jump past each predicate.
+	{
+		it, ierr := s.db.NewIter(&pebble.IterOptions{
+			LowerBound: []byte{prefPOS},
+			UpperBound: []byte{prefPOS + 1},
+		})
+		if ierr != nil {
+			return 0, 0, ierr
+		}
+		for ok := it.First(); ok; {
+			key := it.Key()
+			predEnd := bytes.IndexByte(key[1:], sep)
+			if predEnd < 0 {
+				ok = it.Next()
+				continue
+			}
+			predicates++
+			predPrefix := key[:1+predEnd+1]
+			predUpper := upperBoundForPrefix(predPrefix)
+			ok = it.SeekGE(predUpper)
+		}
+		if e := it.Error(); e != nil {
+			it.Close()
+			return 0, 0, e
+		}
+		it.Close()
+	}
+	return quads, predicates, nil
+}
+
+// CommitStats mirrors quadstore.CommitStats.
+type CommitStats struct {
+	TotalCommits int64
+	OldCommits   int64
+	TotalOps     int64
+	OldOps       int64
+}
+
+// CommitStatsAt returns commit-journal counts. Old fields are
+// measured against cutoff; a zero cutoff yields 0 for both Old
+// fields. Reads the commits keyspace twice (once for counts, once
+// to build the old-IDs set if cutoff is set), then the commit_ops
+// keyspace once.
+func (s *Store) CommitStatsAt(_ context.Context, cutoff time.Time) (CommitStats, error) {
+	var cs CommitStats
+	hasCutoff := !cutoff.IsZero()
+	cutoffUnix := cutoff.Unix()
+
+	var oldIDs map[string]struct{}
+	if hasCutoff {
+		oldIDs = make(map[string]struct{})
+	}
+
+	// Walk commits.
+	cIt, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte{prefC},
+		UpperBound: []byte{prefC + 1},
+	})
+	if err != nil {
+		return cs, err
+	}
+	for ok := cIt.First(); ok; ok = cIt.Next() {
+		cs.TotalCommits++
+		if !hasCutoff {
+			continue
+		}
+		ts, ok := decodeCommitTimestamp(cIt.Value())
+		if !ok {
+			continue
+		}
+		if ts < cutoffUnix {
+			cs.OldCommits++
+			// commitID is the key minus the 'c' prefix.
+			id := string(cIt.Key()[1:])
+			oldIDs[id] = struct{}{}
+		}
+	}
+	if e := cIt.Error(); e != nil {
+		cIt.Close()
+		return cs, e
+	}
+	cIt.Close()
+
+	// Walk commit_ops.
+	coIt, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte{prefCO},
+		UpperBound: []byte{prefCO + 1},
+	})
+	if err != nil {
+		return cs, err
+	}
+	for ok := coIt.First(); ok; ok = coIt.Next() {
+		cs.TotalOps++
+		if !hasCutoff {
+			continue
+		}
+		// Key: 'C' | commitID | 0x00 | varint(seq)
+		key := coIt.Key()
+		idEnd := bytes.IndexByte(key[1:], sep)
+		if idEnd < 0 {
+			continue
+		}
+		id := string(key[1 : 1+idEnd])
+		if _, isOld := oldIDs[id]; isOld {
+			cs.OldOps++
+		}
+	}
+	if e := coIt.Error(); e != nil {
+		coIt.Close()
+		return cs, e
+	}
+	coIt.Close()
+
+	return cs, nil
+}
+
+// decodeCommitTimestamp reads the leading varint(ts) from a
+// commit-row value encoded by encodeCommitValue.
+func decodeCommitTimestamp(v []byte) (int64, bool) {
+	ts, n := binary.Varint(v)
+	if n <= 0 {
+		return 0, false
+	}
+	return ts, true
+}

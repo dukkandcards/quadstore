@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func tempPebbleStoreT(t *testing.T) *PebbleStore {
@@ -174,6 +175,159 @@ func TestPebbleStore_BulkLoader(t *testing.T) {
 	}
 	if n != 10 {
 		t.Errorf("after bulk-load count=%d, want 10 distinct quads", n)
+	}
+}
+
+func TestPebbleStore_LabelCountsAndStats(t *testing.T) {
+	s := tempPebbleStoreT(t)
+	ctx := context.Background()
+	w, _ := s.Writer(ctx)
+	defer w.Close()
+
+	if err := w.Commit(ctx, Batch{
+		Adds: []Quad{
+			{Subject: "a", Predicate: "p1", Object: "o", Label: "source:a"},
+			{Subject: "b", Predicate: "p2", Object: "o", Label: "source:a"},
+			{Subject: "c", Predicate: "p1", Object: "o", Label: "source:b"},
+			{Subject: "d", Predicate: "p3", Object: "o", Label: "derived:x"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	counts, err := s.LabelCounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["source:a"] != 2 {
+		t.Errorf("source:a count=%d, want 2", counts["source:a"])
+	}
+	if counts["source:b"] != 1 {
+		t.Errorf("source:b count=%d, want 1", counts["source:b"])
+	}
+	if counts["derived:x"] != 1 {
+		t.Errorf("derived:x count=%d, want 1", counts["derived:x"])
+	}
+
+	quads, predicates, err := s.Stats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quads != 4 {
+		t.Errorf("Stats quads=%d, want 4", quads)
+	}
+	if predicates != 3 {
+		t.Errorf("Stats predicates=%d, want 3 (p1, p2, p3)", predicates)
+	}
+}
+
+func TestPebbleStore_CommitStatsAt(t *testing.T) {
+	s := tempPebbleStoreT(t)
+	ctx := context.Background()
+	w, _ := s.Writer(ctx)
+	defer w.Close()
+
+	// Two commits, each with two ops.
+	if err := w.Commit(ctx, Batch{
+		Adds: []Quad{
+			{Subject: "a", Predicate: "p", Object: "1", Label: "source:t"},
+			{Subject: "a", Predicate: "p", Object: "2", Label: "source:t"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit(ctx, Batch{
+		Adds: []Quad{
+			{Subject: "b", Predicate: "p", Object: "1", Label: "source:t"},
+			{Subject: "b", Predicate: "p", Object: "2", Label: "source:t"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cs, err := s.CommitStatsAt(time.Time{}) // zero cutoff: no Old fields
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cs.TotalCommits != 2 {
+		t.Errorf("TotalCommits=%d, want 2", cs.TotalCommits)
+	}
+	if cs.TotalOps != 4 {
+		t.Errorf("TotalOps=%d, want 4", cs.TotalOps)
+	}
+	if cs.OldCommits != 0 || cs.OldOps != 0 {
+		t.Errorf("zero cutoff but Old fields nonzero: %+v", cs)
+	}
+
+	// Future cutoff: every commit is "old."
+	future := time.Now().Add(1 * time.Hour)
+	cs, err = s.CommitStatsAt(future)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cs.OldCommits != 2 {
+		t.Errorf("OldCommits=%d, want 2", cs.OldCommits)
+	}
+	if cs.OldOps != 4 {
+		t.Errorf("OldOps=%d, want 4", cs.OldOps)
+	}
+
+	// NoAudit commits should NOT show up in commit stats.
+	if err := w.Commit(ctx, Batch{
+		Adds:    []Quad{{Subject: "c", Predicate: "p", Object: "1", Label: "source:t"}},
+		NoAudit: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cs, err = s.CommitStatsAt(time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cs.TotalCommits != 2 {
+		t.Errorf("after NoAudit Commit: TotalCommits=%d, still want 2", cs.TotalCommits)
+	}
+}
+
+func TestMigrateToPebble(t *testing.T) {
+	src := tempStore(t)
+	dst := tempPebbleStoreT(t)
+	ctx := context.Background()
+
+	w, _ := src.Writer(ctx)
+	if err := w.Commit(ctx, Batch{
+		Adds: []Quad{
+			{Subject: "alice", Predicate: "knows", Object: "bob", Label: "source:test"},
+			{Subject: "bob", Predicate: "knows", Object: "carol", Label: "source:test"},
+			{Subject: "alice", Predicate: "age", Object: "30", Label: "derived:demo"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	stats, err := MigrateToPebble(ctx, src, dst, MigrateToPebbleOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.QuadsCopied != 3 {
+		t.Errorf("QuadsCopied=%d, want 3", stats.QuadsCopied)
+	}
+
+	// Confirm contents on the destination.
+	n, err := dst.Reader().Count(ctx, Pattern{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Errorf("dst quad count=%d, want 3", n)
+	}
+
+	counts, err := dst.LabelCounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["source:test"] != 2 || counts["derived:demo"] != 1 {
+		t.Errorf("dst LabelCounts wrong: %+v", counts)
 	}
 }
 
