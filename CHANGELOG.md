@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Pebble backend (opt-in)
+## v0.2.0 — 2026-05-05 — Pebble backend (opt-in)
 
 ### Added
 - **`OpenPebble(path)` returns a `*PebbleStore`**: a Pebble-backed
