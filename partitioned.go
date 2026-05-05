@@ -194,8 +194,14 @@ func OpenPartitioned(cfg PartitionedConfig) (*Store, error) {
 // openSQLite is the shared connection-open path used by both Open and
 // OpenPartitioned. Centralizing it keeps the PRAGMA set in one place.
 func openSQLite(path string) (*sql.DB, error) {
+	// busy_timeout=60s: WAL lets readers and writers coexist, but two
+	// writers still contend on the writer slot. SecDek's secdek-server
+	// holds the slot in bursts of several seconds during gridCorpusIndex
+	// warmup; 5 s wasn't enough and edgar-load saw 30+ SQLITE_BUSY events
+	// in a 3-minute window. 60 s covers a single warmup-write burst with
+	// margin and falls back to error after that.
 	dsn := path + "?_pragma=journal_mode(WAL)" +
-		"&_pragma=busy_timeout(5000)" +
+		"&_pragma=busy_timeout(60000)" +
 		"&_pragma=synchronous(NORMAL)" +
 		"&_pragma=cache_size(-262144)" +
 		"&_pragma=journal_size_limit(500000000)"

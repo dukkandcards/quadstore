@@ -526,7 +526,7 @@ func MigrateFromSnapshot(
 // vacuumInto runs `VACUUM INTO 'dest'` on srcPath. Opens its own
 // connection to srcPath so callers don't need an open *Store handle.
 func vacuumInto(ctx context.Context, srcPath, dstPath string) error {
-	db, err := sql.Open("sqlite", srcPath+"?_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", srcPath+"?_pragma=busy_timeout(60000)")
 	if err != nil {
 		return fmt.Errorf("open src: %w", err)
 	}
