@@ -99,7 +99,10 @@ func main() {
 }
 ```
 
-See [`examples/`](./examples) for runnable programs (audit log, multi-tenant graph, ingest pipeline).
+See [`examples/`](./examples) for runnable programs:
+- [`examples/minimal`](./examples/minimal) — open, write, read in one file.
+- [`examples/audit-log`](./examples/audit-log) — append-only event log with provenance metadata.
+- [`examples/multi-tenant`](./examples/multi-tenant) — `human:{tenant}/...` labels as the security boundary.
 
 ## Comparison
 
