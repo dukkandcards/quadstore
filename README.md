@@ -173,6 +173,7 @@ Full design rationale: [`docs/PARTITIONING_DESIGN.md`](docs/PARTITIONING_DESIGN.
 - [`docs/INCREMENTAL_PROCESSING.md`](docs/INCREMENTAL_PROCESSING.md) — patterns for ingest pipelines that don't re-derive the whole world every tick.
 - [`CHANGELOG.md`](CHANGELOG.md) — version history with breaking-change callouts.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — small patches welcome; distributed-consensus PRs politely declined.
+- [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md) — Cayley, modernc.org/sqlite, SQLite, Go, and the projects this stands on top of.
 - [`RESEARCH.md`](RESEARCH.md) — open notes on derivation/clustering work that informs library direction.
 
 ## Used in production
@@ -181,11 +182,13 @@ Full design rationale: [`docs/PARTITIONING_DESIGN.md`](docs/PARTITIONING_DESIGN.
 
 If you ship something on quadstore, open a PR adding it here.
 
-## Inspiration
+## Acknowledgements
 
-quadstore is a spiritual descendant of [**Cayley**](https://github.com/cayleygraph/cayley), the open-source Go graph database written by Barak Michener, Robert Hessmann, and the contributors who followed. Cayley was released in 2014 and generalized across backends (BoltDB, LevelDB, SQL, Mongo) and query languages (Gizmo, GraphQL, MQL); the project showed that a graph-shaped store didn't need to be an enterprise product to be useful, and a lot of what's quietly correct about quadstore — quad-shape over triple-shape, idempotent commits, the embedded-library shape — is downstream of decisions Cayley made first.
+quadstore stands on the shoulders of [**Cayley**](https://github.com/cayleygraph/cayley) — the open-source Go graph database written by **Barak Michener**, **Robert Hessmann**, and the contributors who followed. Cayley was released in 2014, generalized across backends (BoltDB, LevelDB, SQL, MongoDB) and query languages (Gizmo, GraphQL, MQL), and is the project that showed an entire generation of Go developers that a graph-shaped store could live as an embedded library, not an enterprise product. The decisions that quadstore takes for granted — quad-shape over triple-shape, idempotent commits, the embedded-library deployment shape — are downstream of choices Barak and Robert made first.
 
 quadstore is the deliberate shrink of that idea: one backend (SQLite via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite), pure Go), no query language, label namespaces enforced at write time. If you worked on Cayley, this will feel familiar — and the parts that aren't familiar are usually places where we picked the more opinionated path Cayley left to backend authors.
+
+Thank you, Barak and Robert. We are happily here because you were there first. If you ever want to take a look at the code, open an issue, or tell us we got something wrong — we'd be honored.
 
 ## A note on philosophy
 
