@@ -18,7 +18,10 @@ Translated:
 | 1,000-quad `Writer.Commit` batch | 12.4 ms | 12.4 µs | **~80,000 quads/sec** |
 | `Reader.Find` by subject (indexed) | 69 µs | 69 µs | ~14,400 lookups/sec |
 
-Read these as the floor, not the ceiling: SQLite synchronous-mode is `FULL` by default — every commit waits on `fsync`. Production workloads typically use `synchronous=NORMAL` for ingest pipelines and accept a small durability window in exchange for substantially higher commit rates.
+These numbers are taken with quadstore's defaults: `journal_mode=WAL`,
+`synchronous=NORMAL`, 256 MB page cache. `BulkLoader` flips to
+`synchronous=OFF` + `journal_mode=MEMORY` for the duration of a load
+and restores the originals on `Close`.
 
 ## Production observations (SecDek, EC2 t4g.large, Linux/arm64)
 
@@ -45,14 +48,83 @@ Read these as the floor, not the ceiling: SQLite synchronous-mode is `FULL` by d
 
 **Don't fight SQLite's single-writer rule.** One Writer per partition at a time. Two goroutines opening `WriterFor` against the same partition will serialize; opening against different partitions will not.
 
+## Side-by-side vs raw SQLite (the cost of using the library)
+
+quadstore is a thin layer over `modernc.org/sqlite` (no CGo). To make
+the overhead concrete, `bench_compare_test.go` runs the same workload
+against a hand-rolled `quads` table on the same driver. Same Go
+version, same machine (M1 Pro, darwin/arm64), same PRAGMAs:
+
+- The "default" raw bench uses `journal_mode=WAL` + `synchronous=NORMAL`,
+  which matches what quadstore opens with.
+- The "BulkLoader-equivalent" raw bench additionally applies the same
+  PRAGMAs `BulkLoader` flips internally (`synchronous=OFF`,
+  `journal_mode=MEMORY`, 2 GB cache, `temp_store=MEMORY`).
+
+Reproduce with `go test -bench='Compare|BenchmarkCommit_|BenchmarkFind_' -benchtime=2s ./...`:
+
+```
+BenchmarkCompare_RawSQLite_SingleInsert-10              25.6 µs/op
+BenchmarkCommit_SingleQuad-10                          115.7 µs/op
+
+BenchmarkCompare_RawSQLite_Batch1k-10                   3.81 ms/op   (3.8 µs/quad)
+BenchmarkCommit_Batch1k-10                             12.87 ms/op   (12.9 µs/quad)
+
+BenchmarkCompare_RawSQLite_FindBySubject-10             90.6 µs/op
+BenchmarkFind_BySubject-10                              69.0 µs/op
+
+BenchmarkCompare_RawSQLite_BulkLoaderEquivalent-10     40.8 ms/op    (4.1 µs/quad, 10k load)
+BenchmarkCompare_Quadstore_BulkLoader10k-10           374.4 ms/op    (37.4 µs/quad, 10k load)
+```
+
+Read these as overhead numbers, not headline numbers:
+
+| operation | raw SQLite | quadstore | overhead |
+|---|---|---|---|
+| Single-quad commit | 25.6 µs | 115.7 µs | **~4.5×** |
+| 1,000-quad transaction | 3.8 µs/quad | 12.9 µs/quad | **~3.4×** |
+| Subject lookup (~100 rows) | 90.6 µs | 69.0 µs | **0.76×** (quadstore wins) |
+| 10,000-quad bulk load | 4.1 µs/quad | 37.4 µs/quad | **~9×** |
+
+Where the overhead comes from:
+
+- **Label namespace validation** on every write (`source:` / `derived:` /
+  `human:{tenant}` / `meta:` prefix check).
+- **Commit-row writes** — `Writer.Commit` and `BulkLoader.Close` write a
+  `meta:commits` row recording the partition, label, count, and
+  timestamp. That's why single-quad commit shows the largest relative
+  cost: one user quad + one commit row + per-statement plumbing.
+- **Per-Writer plumbing** — context propagation, partition routing,
+  per-call validation, the `iter.Seq2` read pipeline.
+
+Where quadstore wins:
+
+- **Subject lookup is faster** than the raw schema's natural choice
+  (`PRIMARY KEY (label, subject, predicate, object)` + a separate
+  `idx_subject`). quadstore's primary index is `(label, subject,
+  predicate)` directly — fewer pages touched on a leading-subject
+  scan.
+
+What this means in practice: for a single-quad commit hot path you
+will measure quadstore overhead. For a bulk ingest you will measure
+quadstore overhead. For everything else (mixed reads, audit-log
+appends, partitioned multi-tenant access) the overhead is in the
+noise relative to disk, network, and application logic.
+
+Honest framing: if you have a workload where 4× single-commit overhead
+is the bottleneck, you do not want a library — you want to write the
+SQL yourself, accept the schema lock-in, and deal with namespace
+enforcement, audit logging, and partition routing on your own.
+
 ## Benchmarks we'd like to add
 
-The current `bench_test.go` covers commit + find. To make this doc concrete against alternatives, we'd like to add (PRs welcome):
+The current `bench_test.go` + `bench_compare_test.go` cover commit,
+find, and side-by-side raw-SQLite comparison. To make this doc
+concrete against external alternatives, we'd like to add (PRs welcome):
 
 - `BenchmarkBulkLoader_1M` — measure end-to-end BulkLoader throughput on a 1 M-quad ingest with `synchronous=NORMAL`.
 - `BenchmarkConcurrentReaders` — N readers against a populated store while a writer streams; show contention shape.
 - `BenchmarkMigrate_GB-scale` — `Migrate` end-to-end on a 1+ GB source with the various option combinations (`OnlySince`, `NoAudit`).
-- Side-by-side vs raw SQLite (manual `quads` table, no library) to measure the library's overhead.
 - Side-by-side vs Cayley with the BoltDB backend (Cayley is unmaintained as of 2024 but still installable for reference numbers).
 
 Until those land, the production observations from SecDek are our most honest answer to "is this fast enough for me?"
