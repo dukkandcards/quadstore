@@ -64,17 +64,23 @@ version, same machine (M1 Pro, darwin/arm64), same PRAGMAs:
 Reproduce with `go test -bench='Compare|BenchmarkCommit_|BenchmarkFind_' -benchtime=2s ./...`:
 
 ```
-BenchmarkCompare_RawSQLite_SingleInsert-10              25.6 µs/op
-BenchmarkCommit_SingleQuad-10                          115.7 µs/op
+BenchmarkCompare_RawSQLite_SingleInsert-10                   25.6 µs/op
+BenchmarkCommit_SingleQuad-10                               115.7 µs/op
 
-BenchmarkCompare_RawSQLite_Batch1k-10                   3.81 ms/op   (3.8 µs/quad)
-BenchmarkCommit_Batch1k-10                             12.87 ms/op   (12.9 µs/quad)
+BenchmarkCompare_RawSQLite_Batch1k-10                        3.81 ms/op   (3.8 µs/quad)
+BenchmarkCommit_Batch1k-10                                  12.87 ms/op   (12.9 µs/quad)
 
-BenchmarkCompare_RawSQLite_FindBySubject-10             90.6 µs/op
-BenchmarkFind_BySubject-10                              69.0 µs/op
+BenchmarkCompare_RawSQLite_FindBySubject-10                  90.6 µs/op
+BenchmarkFind_BySubject-10                                   69.0 µs/op
 
-BenchmarkCompare_RawSQLite_BulkLoaderEquivalent-10     40.8 ms/op    (4.1 µs/quad, 10k load)
-BenchmarkCompare_Quadstore_BulkLoader10k-10           374.4 ms/op    (37.4 µs/quad, 10k load)
+BenchmarkCompare_RawSQLite_BulkLoad/N=1000-10                2.49 ms/op   (2.5 µs/quad)
+BenchmarkCompare_Quadstore_BulkLoader/N=1000-10              7.26 ms/op   (7.3 µs/quad)
+
+BenchmarkCompare_RawSQLite_BulkLoad/N=10000-10              32.16 ms/op   (3.2 µs/quad)
+BenchmarkCompare_Quadstore_BulkLoader/N=10000-10            72.33 ms/op   (7.2 µs/quad)
+
+BenchmarkCompare_RawSQLite_BulkLoad/N=100000-10            345.11 ms/op   (3.5 µs/quad)
+BenchmarkCompare_Quadstore_BulkLoader/N=100000-10          761.59 ms/op   (7.6 µs/quad)
 ```
 
 Read these as overhead numbers, not headline numbers:
@@ -84,16 +90,27 @@ Read these as overhead numbers, not headline numbers:
 | Single-quad commit | 25.6 µs | 115.7 µs | **~4.5×** |
 | 1,000-quad transaction | 3.8 µs/quad | 12.9 µs/quad | **~3.4×** |
 | Subject lookup (~100 rows) | 90.6 µs | 69.0 µs | **0.76×** (quadstore wins) |
-| 10,000-quad bulk load | 4.1 µs/quad | 37.4 µs/quad | **~9×** |
+| 1k-quad bulk load | 2.5 µs/quad | 7.3 µs/quad | **~2.9×** |
+| 10k-quad bulk load | 3.2 µs/quad | 7.2 µs/quad | **~2.25×** |
+| 100k-quad bulk load | 3.5 µs/quad | 7.6 µs/quad | **~2.2×** |
+
+Per-quad rate stays flat across N for both — the overhead is structural,
+not amortizable, but bounded at roughly 2× at scale.
 
 Where the overhead comes from:
 
 - **Label namespace validation** on every write (`source:` / `derived:` /
   `human:{tenant}` / `meta:` prefix check).
-- **Commit-row writes** — `Writer.Commit` and `BulkLoader.Close` write a
-  `meta:commits` row recording the partition, label, count, and
+- **Commit-row writes** — `Writer.Commit` writes a `commits` +
+  `commit_ops` audit row recording the partition, label, count, and
   timestamp. That's why single-quad commit shows the largest relative
   cost: one user quad + one commit row + per-statement plumbing.
+  `BulkLoader` skips the audit trail by design.
+- **Index drop+rebuild on bulk** — `BulkLoader.Close` rebuilds three
+  secondary indexes (idx_pos, idx_osp, idx_lsp). On a 100k load this
+  is ~22% of total time per profile; below ~5k rows it's
+  net-negative, which is why `Writer.Commit` batches are the right
+  tool for small loads.
 - **Per-Writer plumbing** — context propagation, partition routing,
   per-call validation, the `iter.Seq2` read pipeline.
 

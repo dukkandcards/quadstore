@@ -163,69 +163,100 @@ func BenchmarkCompare_RawSQLite_FindBySubject(b *testing.B) {
 // _ = context.Background() pattern below to keep imports symmetric.
 var _ = context.Background
 
-// BenchmarkCompare_RawSQLite_BulkLoaderEquivalent emits 10k rows in
-// 500-row batches via raw SQLite — apples-to-apples vs quadstore's
-// BulkLoader (default batchSize=500).
-func BenchmarkCompare_RawSQLite_BulkLoaderEquivalent(b *testing.B) {
-	db := tempRawSQLiteBulkTuned(b)
-	const total = 10000
+// rawSQLiteBulkLoad emits `total` rows in 500-row transactions against
+// a raw SQLite quad table (bulk-tuned PRAGMAs). Centralizes the loop so
+// the parameterized benchmarks below stay readable.
+func rawSQLiteBulkLoad(b *testing.B, db *sql.DB, run, total int) {
 	const batchSize = 500
-	b.ResetTimer()
-	for run := 0; run < b.N; run++ {
-		tx, err := db.Begin()
-		if err != nil {
+	tx, err := db.Begin()
+	if err != nil {
+		b.Fatal(err)
+	}
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO quads(subject, predicate, object, label) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < total; i++ {
+		if _, err := stmt.Exec(fmt.Sprintf("s%d-%d", run, i), "p", "o", "source:bench"); err != nil {
 			b.Fatal(err)
 		}
-		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO quads(subject, predicate, object, label) VALUES (?, ?, ?, ?)`)
-		if err != nil {
-			b.Fatal(err)
-		}
-		for i := 0; i < total; i++ {
-			if _, err := stmt.Exec(fmt.Sprintf("s%d-%d", run, i), "p", "o", "source:bench"); err != nil {
+		if (i+1)%batchSize == 0 {
+			stmt.Close()
+			if err := tx.Commit(); err != nil {
 				b.Fatal(err)
 			}
-			if (i+1)%batchSize == 0 {
-				stmt.Close()
-				if err := tx.Commit(); err != nil {
-					b.Fatal(err)
-				}
-				tx, err = db.Begin()
-				if err != nil {
-					b.Fatal(err)
-				}
-				stmt, err = tx.Prepare(`INSERT OR IGNORE INTO quads(subject, predicate, object, label) VALUES (?, ?, ?, ?)`)
-				if err != nil {
-					b.Fatal(err)
-				}
+			tx, err = db.Begin()
+			if err != nil {
+				b.Fatal(err)
+			}
+			stmt, err = tx.Prepare(`INSERT OR IGNORE INTO quads(subject, predicate, object, label) VALUES (?, ?, ?, ?)`)
+			if err != nil {
+				b.Fatal(err)
 			}
 		}
-		stmt.Close()
-		tx.Commit()
+	}
+	stmt.Close()
+	tx.Commit()
+}
+
+// BenchmarkCompare_RawSQLite_BulkLoad measures raw-SQLite bulk-load
+// throughput across N. Apples-to-apples vs quadstore's BulkLoader at
+// the same N below. The raw schema keeps its one secondary index
+// inline; quadstore drops 3 indexes and rebuilds on Close, so the
+// fixed-cost-vs-throughput tradeoff shifts with N.
+//
+// Each iteration uses a fresh DB so cumulative table growth doesn't
+// distort per-iteration cost.
+func BenchmarkCompare_RawSQLite_BulkLoad(b *testing.B) {
+	for _, total := range []int{1000, 10000, 100000} {
+		b.Run(fmt.Sprintf("N=%d", total), func(b *testing.B) {
+			b.ResetTimer()
+			for run := 0; run < b.N; run++ {
+				b.StopTimer()
+				db := tempRawSQLiteBulkTuned(b)
+				b.StartTimer()
+				rawSQLiteBulkLoad(b, db, run, total)
+				b.StopTimer()
+				db.Close()
+				b.StartTimer()
+			}
+		})
 	}
 }
 
-// quadstore-side counterpart to the BulkLoader-equivalent raw bench.
-func BenchmarkCompare_Quadstore_BulkLoader10k(b *testing.B) {
-	s := tempBenchStore(b)
+// BenchmarkCompare_Quadstore_BulkLoader exercises quadstore's BulkLoader
+// at the same N as the raw bench above. Each iteration uses a fresh
+// store; the timed window covers BulkLoader open + Add loop + Close
+// (which rebuilds the 3 secondary indexes).
+func BenchmarkCompare_Quadstore_BulkLoader(b *testing.B) {
 	ctx := context.Background()
-	const total = 10000
-	b.ResetTimer()
-	for run := 0; run < b.N; run++ {
-		bl, err := s.BulkLoaderWithLabel(ctx, "source:bench")
-		if err != nil {
-			b.Fatal(err)
-		}
-		for i := 0; i < total; i++ {
-			if err := bl.Add(Quad{
-				Subject:   fmt.Sprintf("s%d-%d", run, i),
-				Predicate: "p",
-				Object:    "o",
-			}); err != nil {
-				b.Fatal(err)
+	for _, total := range []int{1000, 10000, 100000} {
+		b.Run(fmt.Sprintf("N=%d", total), func(b *testing.B) {
+			b.ResetTimer()
+			for run := 0; run < b.N; run++ {
+				b.StopTimer()
+				s := tempBenchStore(b)
+				b.StartTimer()
+				bl, err := s.BulkLoaderWithLabel(ctx, "source:bench")
+				if err != nil {
+					b.Fatal(err)
+				}
+				for i := 0; i < total; i++ {
+					if err := bl.Add(Quad{
+						Subject:   fmt.Sprintf("s%d-%d", run, i),
+						Predicate: "p",
+						Object:    "o",
+					}); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if err := bl.Close(); err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				s.Close()
+				b.StartTimer()
 			}
-		}
-		if err := bl.Close(); err != nil {
-			b.Fatal(err)
-		}
+		})
 	}
 }
