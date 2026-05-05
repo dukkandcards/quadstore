@@ -100,7 +100,14 @@ If you need a query language an analyst can run, sharding across machines, or bu
 
 ## Where it stands
 
-`v0.1.x`. API is stabilizing — breaking changes are possible before `v1.0.0` and the CHANGELOG calls them out explicitly. Running in production at [SecDek](https://sfy.io): 28 GB graph, ~10K quads/sec sustained, sub-millisecond point lookups on indexed predicates.
+`v0.2-track`. SQLite backend (default) is production-tested on
+[SecDek](https://sfy.io) at 28 GB / ~10K quads/sec sustained
+ingest / sub-millisecond indexed lookups. The Pebble-backed
+opt-in (`OpenPebble`) is shipped as of v0.2 with full Writer /
+Reader / BulkLoader / LabelCounts / Stats / CommitStatsAt surface
+and cross-backend migration via `MigrateToPebble`. API is
+stabilizing — breaking changes are possible before `v1.0.0` and
+the [`CHANGELOG`](./CHANGELOG.md) calls them out explicitly.
 
 If you ship something on quadstore, open a PR adding it here.
 

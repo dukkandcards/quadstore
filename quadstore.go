@@ -1,6 +1,21 @@
-// Package quadstore is a minimal quad store backed by SQLite.
+// Package quadstore is a minimal embedded graph database for Go.
 // Cayley-inspired first principles: subject-predicate-object-label,
-// schema-on-read, one file per product, path-based traversal.
+// schema-on-read, one file (or directory) per product, path-based
+// traversal.
+//
+// Two backends ship in the same package:
+//
+//   - quadstore.Open(path) → *Store     — SQLite via modernc.org/sqlite,
+//     pure Go, no CGo, the default.
+//   - quadstore.OpenPebble(path) → *PebbleStore — opt-in, Pebble LSM
+//     (CockroachDB lineage), pure Go. ~2-40× faster on most metrics
+//     at the cost of ~20 transitive deps. See docs/PEBBLE_VS_SQLITE.md
+//     for measured deltas.
+//
+// Both backends share the same Quad / Batch / Pattern types, the
+// same label namespace enforcement, and the same Writer / Reader /
+// BulkLoader API shape. Cross-backend migration: see
+// quadstore.MigrateToPebble.
 //
 // Label namespace for quads written via Writer.Commit (enforced):
 //
