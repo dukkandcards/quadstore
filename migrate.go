@@ -14,6 +14,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -414,4 +416,129 @@ func closeLoaders(loaders map[Partition]*BulkLoader) {
 	for _, bl := range loaders {
 		_ = bl.Close()
 	}
+}
+
+// SnapshotOptions configures MigrateFromSnapshot.
+type SnapshotOptions struct {
+	// SnapshotPath is where VACUUM INTO writes the consistent snapshot
+	// of srcPath. Must not exist when MigrateFromSnapshot starts (the
+	// SQLite VACUUM INTO statement refuses to overwrite an existing file).
+	// Required.
+	SnapshotPath string
+
+	// KeepSnapshot, when true, leaves the snapshot file in place after
+	// migration completes. Useful for verification or as an audit
+	// artifact. When false (default), the snapshot is deleted after the
+	// migration's post-verification step.
+	KeepSnapshot bool
+
+	// Migrate carries the per-quad migration options (ChunkSize,
+	// CopyCommits, OnlySince, Progress). Forwarded to Migrate after the
+	// snapshot is taken.
+	Migrate MigrateOptions
+}
+
+// SnapshotStats reports on a MigrateFromSnapshot run.
+type SnapshotStats struct {
+	SnapshotDuration time.Duration // VACUUM INTO wall time
+	SnapshotBytes    int64         // size of the snapshot file in bytes
+	MigrateStats                   // embedded from the underlying Migrate call
+}
+
+// MigrateFromSnapshot is the race-safe counterpart to Migrate. It first
+// takes a consistent point-in-time snapshot of srcPath using SQLite's
+// `VACUUM INTO` statement, then migrates from that frozen snapshot into
+// dst. Concurrent writers on srcPath are explicitly supported by
+// SQLite — VACUUM INTO operates on a private working copy and does not
+// require an exclusive lock on the source.
+//
+// Why this matters: a long-running Migrate against a live source can
+// observe a torn snapshot when concurrent writers add/remove rows
+// mid-stream. With INSERT OR IGNORE on dst this is non-fatal but can
+// undercount derived state — e.g., if the source's daily refresh job
+// `[remove]`s a derived label and is mid-rebuild when Migrate scans,
+// the migration captures fewer rows than expected. MigrateFromSnapshot
+// removes that surface by decoupling the read from any writer activity.
+//
+// Pure-Go: VACUUM INTO is a SQL statement supported by
+// modernc.org/sqlite. No external sqlite3 CLI tool required.
+//
+// srcPath must be a single-file Store (not a partitioned root). For
+// re-partitioning a partitioned source, use Migrate directly with both
+// stores opened simultaneously — partitioned-to-partitioned migration
+// is a separate operation and would require per-partition snapshots.
+//
+// The destination dst must be a partitioned Store (same precondition as
+// Migrate).
+func MigrateFromSnapshot(
+	ctx context.Context,
+	srcPath string,
+	dst *Store,
+	opts SnapshotOptions,
+) (SnapshotStats, error) {
+	if opts.SnapshotPath == "" {
+		return SnapshotStats{}, errors.New("quadstore: SnapshotPath is required")
+	}
+	if !dst.partitioned() {
+		return SnapshotStats{}, ErrDestinationNotPartitioned
+	}
+
+	var stats SnapshotStats
+	t0 := time.Now()
+
+	// Phase 1: VACUUM INTO produces a consistent snapshot file.
+	// Concurrent writers on srcPath are fine per SQLite docs:
+	// https://sqlite.org/lang_vacuum.html
+	if err := vacuumInto(ctx, srcPath, opts.SnapshotPath); err != nil {
+		return stats, fmt.Errorf("quadstore: snapshot %s -> %s: %w", srcPath, opts.SnapshotPath, err)
+	}
+	stats.SnapshotDuration = time.Since(t0)
+
+	// Capture snapshot file size for reporting.
+	if fi, err := os.Stat(opts.SnapshotPath); err == nil {
+		stats.SnapshotBytes = fi.Size()
+	}
+
+	// Phase 2: open the snapshot read-only and migrate from it.
+	snapshot, err := Open(opts.SnapshotPath)
+	if err != nil {
+		return stats, fmt.Errorf("quadstore: open snapshot: %w", err)
+	}
+	defer snapshot.Close()
+
+	migrateStats, err := Migrate(ctx, snapshot, dst, opts.Migrate)
+	stats.MigrateStats = migrateStats
+	if err != nil {
+		return stats, err
+	}
+
+	// Phase 3: cleanup unless caller wants to keep the snapshot.
+	if !opts.KeepSnapshot {
+		snapshot.Close()
+		if err := os.Remove(opts.SnapshotPath); err != nil {
+			return stats, fmt.Errorf("quadstore: remove snapshot: %w", err)
+		}
+	}
+
+	return stats, nil
+}
+
+// vacuumInto runs `VACUUM INTO 'dest'` on srcPath. Opens its own
+// connection to srcPath so callers don't need an open *Store handle.
+func vacuumInto(ctx context.Context, srcPath, dstPath string) error {
+	db, err := sql.Open("sqlite", srcPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return fmt.Errorf("open src: %w", err)
+	}
+	defer db.Close()
+
+	// Escape single quotes in dstPath for the SQL string literal. SQLite
+	// has no parameterized form for VACUUM INTO; the path is part of the
+	// SQL syntax, not a value binding.
+	quoted := "'" + strings.ReplaceAll(dstPath, "'", "''") + "'"
+	_, err = db.ExecContext(ctx, "VACUUM INTO "+quoted)
+	if err != nil {
+		return fmt.Errorf("VACUUM INTO: %w", err)
+	}
+	return nil
 }

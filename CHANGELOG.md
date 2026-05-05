@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-05-05 — race-free migration (`MigrateFromSnapshot`)
+
+### Why
+- The first real-world apply of `Migrate` on a live SecDek source caught
+  a torn-snapshot surface: a daily cron job had `[remove]`d 258 K
+  derived rows and was mid-rebuild when `Migrate` started scanning.
+  Migration captured ~50 K instead of the steady-state 258 K. The fix
+  in operations was to wait for the cron job to finish; the fix in the
+  library is to remove the surface entirely.
+
+### API (additive, no break)
+- `MigrateFromSnapshot(ctx, srcPath, dst, opts) (SnapshotStats, error)`
+  — takes a consistent point-in-time copy of `srcPath` via SQLite's
+  `VACUUM INTO`, then migrates from the frozen snapshot. Concurrent
+  writers on `srcPath` are explicitly supported per SQLite's
+  documentation. Pure-Go; no external `sqlite3` CLI dependency.
+- `SnapshotOptions{SnapshotPath, KeepSnapshot, Migrate}` — caller
+  controls where the snapshot file lands and whether it persists.
+- `SnapshotStats` — embeds `MigrateStats`; adds `SnapshotDuration` and
+  `SnapshotBytes` for the snapshot phase.
+
+### When to use which
+- `MigrateFromSnapshot` — recommended when the source has any
+  concurrent writers (a live system, a cron'd ingest job, anything).
+- `Migrate` — fine when the source is genuinely quiescent (one-shot
+  import from an exported file). The library trusts the caller; use
+  the snapshot path if you cannot guarantee quiescence.
+
+### Test coverage
+- 3 new tests: round-trip with auto-delete snapshot, KeepSnapshot
+  contract, required-options validation. 46 total pass (was 43).
+
+## 2026-05-05 — fix(migrate): don't override BulkLoader.batchSize
+
+`Migrate` was setting `bl.batchSize = opts.ChunkSize` (default 10000),
+producing 40000 SQL variables per multi-row INSERT and tripping
+modernc.org/sqlite's `SQLITE_MAX_VARIABLE_NUMBER` ceiling with
+`SQL logic error: too many SQL variables`. `BulkLoader`'s 500-row
+default is sized for that ceiling and is now left alone.
+`opts.ChunkSize` is repurposed as the progress-reporting cadence,
+decoupled from the per-INSERT row count.
+
 ## 2026-05-05 — partitioning (`OpenPartitioned`, `Migrate`)
 
 ### Why

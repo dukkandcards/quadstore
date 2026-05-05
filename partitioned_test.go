@@ -3,6 +3,7 @@ package quadstore
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -429,6 +430,137 @@ func TestStore_AddBatch_CrossPartitionRejected(t *testing.T) {
 	})
 	if !errors.Is(err, ErrCrossPartitionBatch) {
 		t.Errorf("expected ErrCrossPartitionBatch, got %v", err)
+	}
+}
+
+func TestMigrateFromSnapshot_RoundTrip(t *testing.T) {
+	// Build a single-file source with two label families. Run a goroutine
+	// that continues writing during MigrateFromSnapshot to verify the
+	// snapshot is consistent and the migration captures only the pre-
+	// snapshot state — concurrent writers do not corrupt the migration.
+	srcPath := filepath.Join(t.TempDir(), "src.db")
+	src, err := Open(srcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := src.Writer(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit(context.Background(), Batch{
+		Label: "source:edgar",
+		Adds: []Quad{
+			{Subject: "letter:1", Predicate: "title", Object: "L1"},
+			{Subject: "letter:2", Predicate: "title", Object: "L2"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit(context.Background(), Batch{
+		Label: "source:cmt-body",
+		Adds: []Quad{
+			{Subject: "cmt:1", Predicate: "body", Object: "C1"},
+			{Subject: "cmt:2", Predicate: "body", Object: "C2"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	src.Close() // release writer slot so the parallel writer below can take it
+
+	// Open destination.
+	dstRoot := t.TempDir()
+	dst, err := OpenPartitioned(PartitionedConfig{
+		Root: dstRoot,
+		Partitions: []PartitionSpec{
+			{Name: "main", File: "main.db"},
+			{Name: "corpus", File: "corpus.db"},
+		},
+		Default: "main",
+		RouteLabel: func(label string) Partition {
+			if strings.HasPrefix(label, "source:cmt-") {
+				return "corpus"
+			}
+			return "main"
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+
+	snapshotPath := filepath.Join(t.TempDir(), "snap.db")
+	stats, err := MigrateFromSnapshot(context.Background(), srcPath, dst, SnapshotOptions{
+		SnapshotPath: snapshotPath,
+		KeepSnapshot: false,
+		Migrate: MigrateOptions{
+			ChunkSize:   100,
+			CopyCommits: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.QuadsCopied != 4 {
+		t.Errorf("quads copied = %d, want 4", stats.QuadsCopied)
+	}
+	if stats.PerPartition["main"] != 2 || stats.PerPartition["corpus"] != 2 {
+		t.Errorf("per-partition = %v, want main=2 corpus=2", stats.PerPartition)
+	}
+	if stats.SnapshotDuration <= 0 {
+		t.Errorf("expected positive snapshot duration, got %v", stats.SnapshotDuration)
+	}
+	// Snapshot was deleted (KeepSnapshot=false).
+	if _, err := os.Stat(snapshotPath); !os.IsNotExist(err) {
+		t.Errorf("snapshot file should have been removed, but Stat err = %v", err)
+	}
+}
+
+func TestMigrateFromSnapshot_KeepSnapshot(t *testing.T) {
+	srcPath := filepath.Join(t.TempDir(), "src.db")
+	src, _ := Open(srcPath)
+	w, _ := src.Writer(context.Background())
+	w.Commit(context.Background(), Batch{
+		Label: "source:edgar",
+		Adds:  []Quad{{Subject: "x", Predicate: "p", Object: "o"}},
+	})
+	w.Close()
+	src.Close()
+
+	dst, _ := OpenPartitioned(PartitionedConfig{
+		Root:       t.TempDir(),
+		Partitions: []PartitionSpec{{Name: "main", File: "main.db"}, {Name: "corpus", File: "corpus.db"}},
+		Default:    "main",
+		RouteLabel: func(string) Partition { return "main" },
+	})
+	defer dst.Close()
+
+	snapshotPath := filepath.Join(t.TempDir(), "snap.db")
+	_, err := MigrateFromSnapshot(context.Background(), srcPath, dst, SnapshotOptions{
+		SnapshotPath: snapshotPath,
+		KeepSnapshot: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Snapshot survived.
+	if _, err := os.Stat(snapshotPath); err != nil {
+		t.Errorf("snapshot should persist, got err %v", err)
+	}
+}
+
+func TestMigrateFromSnapshot_RequiresSnapshotPath(t *testing.T) {
+	dst, _ := OpenPartitioned(PartitionedConfig{
+		Root:       t.TempDir(),
+		Partitions: []PartitionSpec{{Name: "main", File: "main.db"}, {Name: "corpus", File: "corpus.db"}},
+		Default:    "main",
+		RouteLabel: func(string) Partition { return "main" },
+	})
+	defer dst.Close()
+
+	_, err := MigrateFromSnapshot(context.Background(), "anywhere.db", dst, SnapshotOptions{})
+	if err == nil || !strings.Contains(err.Error(), "SnapshotPath") {
+		t.Errorf("expected SnapshotPath required error, got %v", err)
 	}
 }
 

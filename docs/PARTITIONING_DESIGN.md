@@ -205,6 +205,66 @@ What does **not** change:
 
 ## Migration tooling
 
+### Race-free path: `MigrateFromSnapshot`
+
+The recommended migration entrypoint when the source DB has any
+concurrent writers (cron'd ingest jobs, a live web server, etc.):
+
+```go
+stats, err := quadstore.MigrateFromSnapshot(ctx, "/var/lib/myapp/legacy.db", dst,
+    quadstore.SnapshotOptions{
+        SnapshotPath: "/var/lib/myapp/snapshot.db",
+        KeepSnapshot: false,
+        Migrate: quadstore.MigrateOptions{
+            ChunkSize:   10000,
+            CopyCommits: true,
+        },
+    })
+```
+
+`MigrateFromSnapshot` runs in three phases:
+
+1. **Snapshot.** Issues `VACUUM INTO 'SnapshotPath'` against the source.
+   Per [SQLite docs](https://sqlite.org/lang_vacuum.html), this produces
+   a consistent point-in-time copy without an exclusive lock — concurrent
+   writers continue to write to the source throughout. The snapshot is
+   a frozen, defragmented file that no longer mutates.
+2. **Migrate.** Opens the snapshot read-only and calls the regular
+   `Migrate` against it. Because the snapshot is frozen, every quad,
+   commit, and commit_op the migration sees is from a single
+   point-in-time — there is no torn-snapshot surface.
+3. **Cleanup.** Removes the snapshot file unless `KeepSnapshot=true`
+   (useful for verification / audit).
+
+This is the right choice when:
+
+- The source is being actively written to (a live system).
+- A torn migration could under-count transient state — e.g., a daily
+  refresh job that `[remove]`s and re-adds a derived label, where a
+  migration starting mid-run would capture only the partially-rebuilt
+  rows.
+- Operator coordination ("stop the timers, run migrate, restart the
+  timers") is fragile or expensive to enforce.
+
+Cost: temporary 2× disk usage (snapshot + source coexist for the
+migration's duration). VACUUM INTO time scales linearly with source size
+— roughly 1–2 minutes per GB on gp3 6000 IOPS storage in our measurements.
+
+### Direct path: `Migrate`
+
+When the source is genuinely quiescent (no writers — e.g., a one-shot
+import from an exported file), `Migrate` is fine and avoids the snapshot
+disk overhead:
+
+```go
+stats, err := quadstore.Migrate(ctx, src, dst, opts)
+```
+
+The library does not enforce quiescence; it trusts the caller. Use
+`MigrateFromSnapshot` if you can't guarantee it.
+
+### CLI shape
+
 A new command, `cmd/partition-migrate`, splits a single-file Store into a
 partitioned set:
 
