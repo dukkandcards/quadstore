@@ -26,29 +26,13 @@ type Shape struct {
 // are opaque (they are data). Two stores produce comparable shapes
 // without revealing either product's content.
 func (s *Store) Shape() (*Shape, error) {
-	// Collect distinct predicates.
-	predRows, err := s.db.Query(`SELECT DISTINCT predicate FROM quads ORDER BY predicate`)
-	if err != nil {
-		return nil, fmt.Errorf("quadstore shape: predicates: %w", err)
-	}
-	var predicates []string
-	for predRows.Next() {
-		var p string
-		if err := predRows.Scan(&p); err != nil {
-			predRows.Close()
-			return nil, err
-		}
-		predicates = append(predicates, p)
-	}
-	predRows.Close()
-	if err := predRows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Tokenize all values and build edges.
+	// On a partitioned Store the shape is the union of all partitions'
+	// shapes — predicates are deduped across partitions, edges are
+	// concatenated. Tokenization is global (so a value seen in two
+	// partitions gets the same Token).
+	predSet := make(map[string]struct{})
 	tokenMap := make(map[string]Token)
 	var nextToken Token = 1
-
 	tokenize := func(val string) Token {
 		if t, ok := tokenMap[val]; ok {
 			return t
@@ -59,31 +43,67 @@ func (s *Store) Shape() (*Shape, error) {
 		return t
 	}
 
-	rows, err := s.db.Query(`SELECT subject, predicate, object FROM quads`)
-	if err != nil {
-		return nil, fmt.Errorf("quadstore shape: quads: %w", err)
-	}
-	defer rows.Close()
-
 	var edges []TokenEdge
-	for rows.Next() {
-		var subj, pred, obj string
-		if err := rows.Scan(&subj, &pred, &obj); err != nil {
+	for _, conn := range s.parts {
+		predRows, err := conn.db.Query(`SELECT DISTINCT predicate FROM quads`)
+		if err != nil {
+			return nil, fmt.Errorf("quadstore shape: predicates %s: %w", conn.name, err)
+		}
+		for predRows.Next() {
+			var p string
+			if err := predRows.Scan(&p); err != nil {
+				predRows.Close()
+				return nil, err
+			}
+			predSet[p] = struct{}{}
+		}
+		predRows.Close()
+		if err := predRows.Err(); err != nil {
 			return nil, err
 		}
-		edges = append(edges, TokenEdge{
-			From:      tokenize(subj),
-			Predicate: pred,
-			To:        tokenize(obj),
-		})
+
+		rows, err := conn.db.Query(`SELECT subject, predicate, object FROM quads`)
+		if err != nil {
+			return nil, fmt.Errorf("quadstore shape: quads %s: %w", conn.name, err)
+		}
+		for rows.Next() {
+			var subj, pred, obj string
+			if err := rows.Scan(&subj, &pred, &obj); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			edges = append(edges, TokenEdge{
+				From:      tokenize(subj),
+				Predicate: pred,
+				To:        tokenize(obj),
+			})
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+
+	predicates := make([]string, 0, len(predSet))
+	for p := range predSet {
+		predicates = append(predicates, p)
 	}
+	sortStrings(predicates)
 
 	return &Shape{
 		NodeCount:  len(tokenMap),
 		Predicates: predicates,
 		Edges:      edges,
 	}, nil
+}
+
+// sortStrings is a tiny dependency-free sort to keep Shape's predicate
+// list stable across runs without pulling in sort just for this file.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
 }

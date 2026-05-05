@@ -1,5 +1,61 @@
 # Changelog
 
+## 2026-05-05 — partitioning (`OpenPartitioned`, `Migrate`)
+
+### Why
+- A single `quads` table hits a B-tree dilution wall when a Store
+  accumulates fact families that don't share queries. Concrete trigger:
+  SecDek's live DB grew 1.3 GB → 28 GB in two weeks after a comment-
+  letter corpus load, and product queries on the (still-256K-row)
+  no-action letter family now scan a B-tree where ~67% of leaves are
+  unrelated. See `docs/PARTITIONING_DESIGN.md`.
+
+### API (additive, no break)
+- `OpenPartitioned(cfg PartitionedConfig) (*Store, error)` — opens N
+  independent SQLite files behind one Reader / Writer / Batch surface.
+- `LabelRouter` (consumer-supplied `func(label string) Partition`) —
+  routes writes by label.
+- `PatternRouter` (optional, `func(p Pattern) Partition`) — routes
+  reads when the consumer has deterministic knowledge beyond label
+  (e.g., subject-prefix scoping). Library never guesses; consumers
+  encode their routing knowledge here.
+- `Store.WriterFor(ctx, p)` — acquires a writer slot for a named
+  partition. Slots are independent across partitions; concurrent
+  Writers on different partitions are allowed.
+- `Store.BulkLoaderFor(ctx, p)` — direct partition target for migration
+  tooling that routes externally.
+- `Store.VacuumFor(ctx, p)` — vacuum a single partition.
+- `Store.Partitions()`, `Store.PartitionFor(label)` — introspection.
+- `Migrate(ctx, src, dst, opts) (MigrateStats, error)` — copies a
+  single-file or partitioned source into a partitioned destination,
+  routing each quad / commit / commit_op via the destination's
+  `RouteLabel`. `OnlySince` enables incremental top-up. The source is
+  read-only throughout.
+
+### Sentinel errors
+`ErrCrossPartitionBatch`, `ErrUnknownPartition`, `ErrUnroutableLabel`,
+`ErrNoPartitions`, `ErrDuplicatePartition`, `ErrEmptyPartitionName`,
+`ErrMissingDefault`, `ErrMissingRouter`, `ErrDestinationNotPartitioned`.
+
+### Behaviour
+- Single-file `Open(path)` is unchanged in behaviour; internally a
+  single-partition Store with an empty partition name.
+- `Reader.Find` / `Reader.Count` scope to one partition when routing
+  resolves; otherwise fan out across every partition. Order across
+  partitions is unspecified.
+- `Writer.Commit` validates every quad in a Batch routes to the
+  Writer's partition; cross-partition batches return
+  `ErrCrossPartitionBatch` and roll back.
+- `Store.Stats` sums quads across partitions; the DISTINCT predicate
+  count is the union of distinct predicates seen in any partition.
+- `Store.Vacuum` runs sequentially across partitions (admin operations
+  on a shared disk parallelise poorly).
+
+### Test coverage
+- 13 new tests in `partitioned_test.go` (routing, fan-out, cross-batch
+  rejection, concurrent writers across partitions, validation matrix,
+  `Migrate` round-trip). All 43 tests pass.
+
 ## 2026-04-20 — commit-journal retention (`Writer.PruneOps` + `cmd/prune`)
 
 ### Why

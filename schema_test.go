@@ -38,7 +38,7 @@ func TestSchema_MigrateV1ToV2(t *testing.T) {
 	}
 	defer s.Close()
 
-	v, err := readSchemaVersion(s.db)
+	v, err := readSchemaVersion(s.parts[0].db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,10 +48,10 @@ func TestSchema_MigrateV1ToV2(t *testing.T) {
 
 	// commits + commit_ops tables exist.
 	var name string
-	if err := s.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='commits'`).Scan(&name); err != nil {
+	if err := s.parts[0].db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='commits'`).Scan(&name); err != nil {
 		t.Errorf("commits table missing: %v", err)
 	}
-	if err := s.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='commit_ops'`).Scan(&name); err != nil {
+	if err := s.parts[0].db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='commit_ops'`).Scan(&name); err != nil {
 		t.Errorf("commit_ops table missing: %v", err)
 	}
 
@@ -82,7 +82,7 @@ func TestSchema_DowngradeRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Poke a fake-future version into meta.
-	if err := writeSchemaVersion(s.db, 99); err != nil {
+	if err := writeSchemaVersion(s.parts[0].db, 99); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()

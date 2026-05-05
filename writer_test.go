@@ -38,7 +38,7 @@ func TestWriterCommit_AddsAndMetadata(t *testing.T) {
 	}
 
 	var commits int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&commits); err != nil {
+	if err := s.parts[0].db.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&commits); err != nil {
 		t.Fatal(err)
 	}
 	if commits != 1 {
@@ -46,7 +46,7 @@ func TestWriterCommit_AddsAndMetadata(t *testing.T) {
 	}
 
 	var ops int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM commit_ops WHERE op='add'`).Scan(&ops); err != nil {
+	if err := s.parts[0].db.QueryRow(`SELECT COUNT(*) FROM commit_ops WHERE op='add'`).Scan(&ops); err != nil {
 		t.Fatal(err)
 	}
 	if ops != 1 {
@@ -54,7 +54,7 @@ func TestWriterCommit_AddsAndMetadata(t *testing.T) {
 	}
 
 	var meta string
-	if err := s.db.QueryRow(`SELECT metadata FROM commits`).Scan(&meta); err != nil {
+	if err := s.parts[0].db.QueryRow(`SELECT metadata FROM commits`).Scan(&meta); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(meta, `"actor":"delta-sync"`) {
@@ -80,7 +80,7 @@ func TestWriterPruneOps(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldEpoch := time.Now().Add(-100 * 24 * time.Hour).Unix()
-	if _, err := s.db.Exec(`UPDATE commits SET created_at = ?`, oldEpoch); err != nil {
+	if _, err := s.parts[0].db.Exec(`UPDATE commits SET created_at = ?`, oldEpoch); err != nil {
 		t.Fatal(err)
 	}
 
@@ -94,8 +94,8 @@ func TestWriterPruneOps(t *testing.T) {
 
 	// Baseline: 2 commits, 2 ops.
 	var commits, ops int
-	s.db.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&commits)
-	s.db.QueryRow(`SELECT COUNT(*) FROM commit_ops`).Scan(&ops)
+	s.parts[0].db.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&commits)
+	s.parts[0].db.QueryRow(`SELECT COUNT(*) FROM commit_ops`).Scan(&ops)
 	if commits != 2 || ops != 2 {
 		t.Fatalf("pre-prune: expected 2 commits / 2 ops, got %d / %d", commits, ops)
 	}
@@ -111,8 +111,8 @@ func TestWriterPruneOps(t *testing.T) {
 	}
 
 	// Commits row survives; only commit_ops was pruned.
-	s.db.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&commits)
-	s.db.QueryRow(`SELECT COUNT(*) FROM commit_ops`).Scan(&ops)
+	s.parts[0].db.QueryRow(`SELECT COUNT(*) FROM commits`).Scan(&commits)
+	s.parts[0].db.QueryRow(`SELECT COUNT(*) FROM commit_ops`).Scan(&ops)
 	if commits != 2 {
 		t.Errorf("post-prune: expected 2 commits preserved, got %d", commits)
 	}
@@ -169,8 +169,8 @@ func TestWriterCommit_Removes(t *testing.T) {
 	}
 
 	var adds, removes int
-	s.db.QueryRow(`SELECT COUNT(*) FROM commit_ops WHERE op='add'`).Scan(&adds)
-	s.db.QueryRow(`SELECT COUNT(*) FROM commit_ops WHERE op='remove'`).Scan(&removes)
+	s.parts[0].db.QueryRow(`SELECT COUNT(*) FROM commit_ops WHERE op='add'`).Scan(&adds)
+	s.parts[0].db.QueryRow(`SELECT COUNT(*) FROM commit_ops WHERE op='remove'`).Scan(&removes)
 	if adds != 1 || removes != 1 {
 		t.Errorf("expected 1 add + 1 remove in commit_ops, got %d + %d", adds, removes)
 	}
@@ -212,7 +212,7 @@ func TestWriterCommit_LabelValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var label string
-	s.db.QueryRow(`SELECT label FROM quads WHERE subject='batch-default'`).Scan(&label)
+	s.parts[0].db.QueryRow(`SELECT label FROM quads WHERE subject='batch-default'`).Scan(&label)
 	if label != "source:batch" {
 		t.Errorf("expected label source:batch, got %q", label)
 	}

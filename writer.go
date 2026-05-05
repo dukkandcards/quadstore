@@ -11,16 +11,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// Partition is an opaque routing key. Today unused (single backing
-// file); reserved for per-partition backing stores (Rung 2 of the
-// concurrent-writer evolution ladder).
-type Partition string
-
 // Batch is the atomic unit of Writer.Commit. Adds and Removes apply
 // together or not at all. Label is the default label applied to Adds
 // whose Quad.Label is empty. Metadata is commit-level provenance; see
 // well-known keys (MetaActor, MetaSource, MetaReason). Any additional
 // keys are accepted.
+//
+// On a partitioned Store, every quad in a Batch must route to the same
+// partition; otherwise Writer.Commit returns ErrCrossPartitionBatch.
 type Batch struct {
 	Adds     []Quad
 	Removes  []Quad
@@ -40,30 +38,64 @@ const (
 // Legacy Add/AddBatch/Delete remain permissive. Empty label is also valid.
 var validLabelPrefixes = []string{"source:", "derived:", "human:", "meta:"}
 
-// Writer is a single-producer write handle. Obtained from Store.Writer
-// or Store.WriterFor; one active at a time per Store. A failed Commit
-// rolls back and leaves the Writer usable for retry. Close releases
-// the writer slot.
+// Writer is a single-producer write handle for one partition. Obtained
+// from Store.Writer (default partition) or Store.WriterFor (named
+// partition). One active Writer at a time per partition; concurrent
+// Writers across different partitions are allowed and independent.
+//
+// A failed Commit rolls back and leaves the Writer usable for retry.
+// Close releases the writer slot.
 type Writer struct {
 	store  *Store
+	conn   *partitionConn // partition this Writer owns the slot of
 	closed bool
 }
 
-// Writer returns a Writer, blocking until the writer slot is free or
-// ctx is cancelled.
+// Writer returns a Writer for the default partition, blocking until the
+// default partition's writer slot is free or ctx is cancelled.
 func (s *Store) Writer(ctx context.Context) (*Writer, error) {
 	return s.WriterFor(ctx, "")
 }
 
-// WriterFor returns a Writer for the given Partition. Today p is ignored
-// (single backing file); reserved for partitioned routing (Rung 2).
-func (s *Store) WriterFor(ctx context.Context, _ Partition) (*Writer, error) {
+// WriterFor returns a Writer for the named partition, blocking until that
+// partition's writer slot is free or ctx is cancelled.
+//
+// An empty Partition routes to the default partition. An unknown name
+// returns ErrUnknownPartition immediately without blocking.
+func (s *Store) WriterFor(ctx context.Context, p Partition) (*Writer, error) {
+	conn, err := s.connFor(p)
+	if err != nil {
+		return nil, err
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case s.writerSlot <- struct{}{}:
-		return &Writer{store: s}, nil
+	case conn.writerSlot <- struct{}{}:
+		return &Writer{store: s, conn: conn}, nil
 	}
+}
+
+// connFor resolves a partition name to its connection. Empty name maps
+// to the default. Used by WriterFor and admin commands.
+func (s *Store) connFor(p Partition) (*partitionConn, error) {
+	if p == "" {
+		// Single-file Store has parts[0] with name "" — unique mapping.
+		// Multi-partition Store has a configured Default.
+		if !s.partitioned() {
+			return s.parts[0], nil
+		}
+		return s.byName[s.defaultName], nil
+	}
+	if conn, ok := s.byName[p]; ok {
+		return conn, nil
+	}
+	return nil, fmt.Errorf("%w: %s", ErrUnknownPartition, p)
+}
+
+// Partition returns the partition name this Writer owns the slot of.
+// "" for single-file Stores.
+func (w *Writer) Partition() Partition {
+	return w.conn.name
 }
 
 // Close releases the writer slot. Safe to call multiple times.
@@ -72,13 +104,19 @@ func (w *Writer) Close() error {
 		return nil
 	}
 	w.closed = true
-	<-w.store.writerSlot
+	<-w.conn.writerSlot
 	return nil
 }
 
-// Commit applies a Batch atomically. On error, the transaction is
-// rolled back and the Writer remains usable for retry. Commit after
-// Close returns an error.
+// Commit applies a Batch atomically to the Writer's partition. On error,
+// the transaction is rolled back and the Writer remains usable for retry.
+//
+// On a partitioned Store, validates every quad routes to this Writer's
+// partition. Returns ErrCrossPartitionBatch if any quad routes elsewhere;
+// the caller splits the batch by partition and acquires the right Writer
+// for each.
+//
+// Commit after Close returns an error.
 func (w *Writer) Commit(ctx context.Context, b Batch) error {
 	if w.closed {
 		return errors.New("quadstore: writer closed")
@@ -104,10 +142,22 @@ func (w *Writer) Commit(ctx context.Context, b Batch) error {
 		if !q.valid() {
 			return fmt.Errorf("quadstore: Adds[%d] missing subject/predicate/object", i)
 		}
+		if w.store.partitioned() {
+			if w.store.partFor(label) != w.conn {
+				return fmt.Errorf("%w: Adds[%d] label %q routes to partition %q, writer holds %q",
+					ErrCrossPartitionBatch, i, label, w.store.partFor(label).name, w.conn.name)
+			}
+		}
 	}
 	for i, q := range b.Removes {
 		if !q.valid() {
 			return fmt.Errorf("quadstore: Removes[%d] missing subject/predicate/object", i)
+		}
+		if w.store.partitioned() {
+			if w.store.partFor(q.Label) != w.conn {
+				return fmt.Errorf("%w: Removes[%d] label %q routes to partition %q, writer holds %q",
+					ErrCrossPartitionBatch, i, q.Label, w.store.partFor(q.Label).name, w.conn.name)
+			}
 		}
 	}
 
@@ -124,7 +174,7 @@ func (w *Writer) Commit(ctx context.Context, b Batch) error {
 		metadataJSON = string(buf)
 	}
 
-	tx, err := w.store.db.BeginTx(ctx, nil)
+	tx, err := w.conn.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -186,20 +236,13 @@ func (w *Writer) Commit(ctx context.Context, b Batch) error {
 }
 
 // PruneOps deletes rows from commit_ops for commits whose created_at is
-// strictly before olderThan. The commits rows themselves are preserved —
-// provenance metadata (actor / source / reason / timestamps / labels)
-// survives; only the per-quad audit trail is discarded. Returns the
-// number of commit_ops rows deleted.
+// strictly before olderThan, on this Writer's partition. The commits
+// rows themselves are preserved.
 //
-// Rationale: commit_ops is typically the largest table in a mature
-// store (one row per add/remove per commit; with bulk regen it can
-// dwarf the quads table itself). The current-state projection lives in
-// `quads` and is unaffected. `derived:*` labels are regeneratable from
-// `source:*` by design, so their audit trail is cheap to discard.
-//
-// Goes through the writer slot to avoid interleaving with Writer.Commit.
-// Runs VACUUM is the caller's responsibility (PRAGMA incremental_vacuum
-// or VACUUM); PruneOps only deletes rows.
+// On a partitioned Store, this only prunes the partition the Writer
+// owns. To prune all partitions, iterate Store.Partitions and acquire
+// a Writer for each. (Sequential admin commands avoid IOPS contention
+// on a shared disk.)
 func (w *Writer) PruneOps(ctx context.Context, olderThan time.Time) (int64, error) {
 	if w.closed {
 		return 0, errors.New("quadstore: writer closed")
@@ -209,7 +252,7 @@ func (w *Writer) PruneOps(ctx context.Context, olderThan time.Time) (int64, erro
 	}
 
 	cutoff := olderThan.Unix()
-	res, err := w.store.db.ExecContext(ctx,
+	res, err := w.conn.db.ExecContext(ctx,
 		`DELETE FROM commit_ops
 		 WHERE commit_id IN (SELECT id FROM commits WHERE created_at < ?)`,
 		cutoff,
