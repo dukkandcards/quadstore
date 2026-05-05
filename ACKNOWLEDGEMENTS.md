@@ -23,6 +23,25 @@ open. quadstore is MIT-licensed and intended to stay that way; if either
 of you ever want to ship something Cayley-shaped on top of it, you have
 our enthusiastic permission and our help.
 
+## Pebble
+
+[**Pebble**](https://github.com/cockroachdb/pebble) is the pure-Go LSM
+storage engine extracted from CockroachDB's storage layer, BSD-3-Clause
+licensed, maintained by **Cockroach Labs**. quadstore's optional v0.2
+Pebble backend (`OpenPebble`) is a thin adapter over Pebble's
+single-process Reader/Writer API — Pebble does the actual work of
+"durable bytes on disk, fast." The 40× single-quad-commit improvement
+on EC2 vs. modernc.org/sqlite is Pebble's win, not ours.
+
+Pebble is unusual in that it's a serious production storage engine
+that has been packaged as an importable Go library — most engines of
+its caliber assume they're the database. The decision to release it
+that way, and to keep it permissively licensed even after CockroachDB
+itself moved off Apache 2.0, is the kind of thing we don't take for
+granted. Auxiliary libraries (`cockroachdb/errors`, `redact`, `swiss`,
+`crlib`, `logtags`, `tokenbucket`) are all Apache 2.0 and inventoried
+in [`docs/LICENSE_AUDIT.md`](docs/LICENSE_AUDIT.md).
+
 ## modernc.org/sqlite
 
 [**modernc.org/sqlite**](https://pkg.go.dev/modernc.org/sqlite) is the
