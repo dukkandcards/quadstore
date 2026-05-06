@@ -1,9 +1,12 @@
 # Partitioning Design
 
-**Status:** DRAFT — for Jay's review (2026-05-05)
-**Track:** Track 1 of the Performance/Backend ladder (per `TODO.md`)
-**Scope:** This doc covers the library API, semantics, and migration tooling.
-DuckDB / Pebble swap (Track 2) is intentionally **out of scope** here.
+**Status:** Design doc; SQLite-backed partitioning shipped in v0.2 via
+`OpenPartitioned`. Pebble-backed partitioning is on the roadmap.
+**Scope:** This doc covers the library API, semantics, and migration
+tooling for SQLite-backed partitioning (`OpenPartitioned` against the
+SQLite backend). The Pebble backend (recommended as of v0.2) runs
+single-dir today; partitioning on Pebble will reuse this routing
+surface.
 
 ## Why
 
@@ -35,8 +38,10 @@ the same wall eventually.
 - **Hiding partitioning from queries that span fact families.** When a query
   legitimately needs all partitions, it pays a fan-out cost; we do not
   pretend otherwise.
-- **Replacing the SQLite backend.** That is Track 2 (DuckDB prototype). This
-  design is single-substrate.
+- **Replacing the SQLite backend.** That landed in v0.2 as Pebble
+  (`quadstore.OpenPebble`); this design is single-substrate (SQLite).
+  Pebble-backed partitioning will reuse this routing surface but is
+  separate work.
 
 ## Design constraints (carried forward from existing decisions)
 

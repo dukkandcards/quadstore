@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/dukkandcards/quadstore"
@@ -36,7 +35,7 @@ func main() {
 	}
 	defer os.RemoveAll(dir)
 
-	store, err := quadstore.Open(filepath.Join(dir, "audit.db"))
+	store, err := quadstore.OpenPebble(dir)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 
 	"github.com/dukkandcards/quadstore"
 )
@@ -32,7 +31,7 @@ func main() {
 	}
 	defer os.RemoveAll(dir)
 
-	store, err := quadstore.Open(filepath.Join(dir, "tenants.db"))
+	store, err := quadstore.OpenPebble(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -100,7 +99,7 @@ func main() {
 	fmt.Println("security, no middleware. The label is the boundary.")
 }
 
-func dumpAlice(ctx context.Context, r *quadstore.Reader, labels ...string) {
+func dumpAlice(ctx context.Context, r *quadstore.PebbleReader, labels ...string) {
 	for _, label := range labels {
 		for q, err := range r.Find(ctx, quadstore.Pattern{
 			Subject: "person:alice",

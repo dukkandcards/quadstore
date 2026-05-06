@@ -27,7 +27,7 @@ contributor licensing agreement, no commercial tier. Deliberate; see
 | `github.com/google/uuid` | v1.6.0 | BSD-3-Clause | [google/uuid](https://github.com/google/uuid/blob/master/LICENSE) |
 | `modernc.org/sqlite` | v1.48.2 | BSD-3-Clause | [pkg.go.dev](https://pkg.go.dev/modernc.org/sqlite?tab=licenses) |
 
-## Pebble backend (opt-in via `OpenPebble`)
+## Pebble backend (recommended; via `OpenPebble`)
 
 The Pebble backend is the largest single source of transitive deps in
 quadstore. Every dep listed below is currently permissive. Six of them

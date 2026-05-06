@@ -5,12 +5,15 @@
 //
 // Two backends ship in the same package:
 //
-//   - quadstore.Open(path) → *Store     — SQLite via modernc.org/sqlite,
-//     pure Go, no CGo, the default.
-//   - quadstore.OpenPebble(path) → *PebbleStore — opt-in, Pebble LSM
-//     (CockroachDB lineage), pure Go. ~2-40× faster on most metrics
-//     at the cost of ~20 transitive deps. See docs/PEBBLE_VS_SQLITE.md
-//     for measured deltas.
+//   - quadstore.OpenPebble(path) → *PebbleStore — Pebble LSM
+//     (CockroachDB lineage), pure Go, no CGo. The recommended
+//     backend. 18-40× faster single-quad commit and ~10× smaller
+//     on disk than the SQLite backend on cloud hardware. See
+//     docs/PEBBLE_VS_SQLITE.md for measured deltas.
+//   - quadstore.Open(path) → *Store — SQLite via modernc.org/sqlite,
+//     pure Go, no CGo. Supported indefinitely. Pick this when you
+//     want ~20 fewer transitive dependencies, smaller binaries, or
+//     sqlite3-CLI access on the data file.
 //
 // Both backends share the same Quad / Batch / Pattern types, the
 // same label namespace enforcement, and the same Writer / Reader /

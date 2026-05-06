@@ -1,10 +1,10 @@
 # quadstore — Contingency plan
 
 What we do if a permissive dependency relicenses out from under us.
-This document exists because a chunk of quadstore's optional Pebble
-backend is maintained by Cockroach Labs, the vendor whose flagship
-product (CockroachDB) was relicensed from Apache 2.0 to BSL in 2019
-and to a hybrid in 2024. No Cockroach Labs *library* has ever been
+This document exists because a chunk of quadstore's Pebble backend
+(recommended as of v0.2) is maintained by Cockroach Labs, the
+vendor whose flagship product (CockroachDB) was relicensed from
+Apache 2.0 to BSL in 2019 and to a hybrid in 2024. No Cockroach Labs *library* has ever been
 relicensed — but planning for the case where one does is cheap, and
 not planning for it is the kind of thing that ends a project.
 
@@ -92,7 +92,7 @@ RaduBerinde/* — all permissive (BSD-2/BSD-3/MIT/Apache-2.0). None has
 shown any sign of relicensing risk, but the same general procedure
 applies: pin, fork-on-trigger, communicate.
 
-## modernc.org/sqlite (the default backend)
+## modernc.org/sqlite (the SQLite backend)
 
 The SQLite-backed `Open(path)` path depends on `modernc.org/sqlite`
 — BSD-3, single maintainer (Jan Mercl). If it stalls (no commit for

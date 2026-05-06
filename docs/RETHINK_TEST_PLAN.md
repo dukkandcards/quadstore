@@ -5,6 +5,19 @@ not decisions to *ship*. The companion analysis is in
 [`RETHINK_2026.md`](./RETHINK_2026.md); this doc is the actionable
 short version.
 
+> **Status — 2026-05-06.** All three tests have been run. Test 1
+> (Pebble vs SQLite head-to-head) passed the decision gate — Pebble
+> won 5 of 6 metrics on M1 Pro and 6 of 6 on Linux gp3. Test 2
+> (M1 Pro vs cloud Linux) was published in
+> [`PEBBLE_VS_SQLITE.md`](./PEBBLE_VS_SQLITE.md). Test 3 (storage
+> density) is partially answered — real-data 19M-quad SecDek
+> round-trip showed ≈10× compression; the predicate-dictionary
+> alone-and-stacked variants are still open. The Pebble backend
+> shipped publicly in v0.2; this doc is retained as the historical
+> record of the test plan and the decision rule. Current state and
+> measured numbers live in [`CHANGELOG.md`](../CHANGELOG.md) and
+> [`PEBBLE_VS_SQLITE.md`](./PEBBLE_VS_SQLITE.md).
+
 ## Recommendation
 
 If we built quadstore today, the single largest change would be

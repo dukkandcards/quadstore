@@ -3,7 +3,10 @@
 Three runnable programs demonstrating the library's main shapes. Each
 is a self-contained `main.go` you can `go run` directly. All three
 build clean (CI verifies it on every commit) and write their data to
-a `MkdirTemp` directory that is cleaned up on exit.
+a `MkdirTemp` directory that is cleaned up on exit. All three open
+the recommended Pebble backend via `quadstore.OpenPebble(dir)`; swap
+to `quadstore.Open(path)` to use the SQLite-backed alternative — the
+rest of the code is the same.
 
 | example | what it shows |
 |---|---|

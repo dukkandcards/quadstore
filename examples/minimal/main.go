@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 
 	"github.com/dukkandcards/quadstore"
 )
@@ -27,7 +26,10 @@ func main() {
 	}
 	defer os.RemoveAll(dir)
 
-	store, err := quadstore.Open(filepath.Join(dir, "graph.db"))
+	// OpenPebble is the recommended backend. The path is a directory
+	// Pebble manages internally. quadstore.Open(filename.db) is the
+	// SQLite-backed alternative — same API, different tradeoffs.
+	store, err := quadstore.OpenPebble(dir)
 	if err != nil {
 		log.Fatal(err)
 	}

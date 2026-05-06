@@ -149,7 +149,9 @@ quadstore stands on the shoulders of [**Cayley**](https://github.com/cayleygraph
 
 quadstore is the deliberate shrink of that idea: two backends (Pebble recommended, SQLite via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) supported), both pure Go, no query language, label namespaces enforced at write time. If you worked on Cayley, this will feel familiar — and the parts that aren't familiar are usually places where we picked the more opinionated path Cayley left to backend authors.
 
-Thank you, Barak and Robert. We are happily here because you were there first. If you ever want to take a look at the code, open an issue, or tell us we got something wrong — we'd be honored.
+Thank you, Barak and Robert Hessmann. We are happily here because you were there first. If you ever want to take a look at the code, open an issue, or tell us we got something wrong — we'd be honored.
+
+Before any of this came together, [**Robert Melton**](https://robertmelton.com/) introduced me to Barak. Robert is on the Cayley contributor list himself and someone I've been talking to about software for the last decade — quadstore exists because that introduction did, and a lot of the taste behind these decisions traces back to conversations with him. Thank you, Robert.
 
 The Pebble backend (recommended as of v0.2) stands on [**Pebble**](https://github.com/cockroachdb/pebble), the pure-Go LSM storage engine maintained by Cockroach Labs. Pebble is an extraction from CockroachDB's storage layer with a clean Go-idiomatic surface, BSD-3-Clause licensed, with the kind of operational maturity that comes from running the world's CockroachDB clusters. The auxiliary libraries (`cockroachdb/errors`, `redact`, `swiss`, `crlib`, `logtags`, `tokenbucket`) are all Apache 2.0 and inventoried in [`docs/LICENSE_AUDIT.md`](./docs/LICENSE_AUDIT.md). If you've shipped Pebble in production: thank you. We benefit from your bug reports.
 
