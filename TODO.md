@@ -1,5 +1,39 @@
 # Quad Store — TODO
 
+## Backend decision: SQLite vs Pebble (2026-05-06)
+
+- [ ] **Decide whether to graduate the Pebble prototype or commit to SQLite.**
+      `pebble_store.go` + bench/torture tests have lived alongside the
+      SQLite path for weeks; SQLite remains the production backend
+      (called via `Open` / `OpenPartitioned`). Decision-relevant memory:
+      `project_quadstore_backend_swap.md`,
+      `project_quadstore_optimization_backlog.md`,
+      `project_quadstore_research_state.md`.
+
+      Forcing function: **secdek-sqlite-busy** is a live production
+      alarm with a runbook — every concurrent-writer contention event
+      is real visible operational cost. If SQLite is the long-term
+      answer, the boot-fanout race needs a structural fix (per-subject
+      sentinel discipline already documented at
+      `~/secdek/docs/INGEST_CONVENTION.md`); if Pebble is the answer,
+      the swap needs a migration plan that doesn't break the four
+      products currently consuming the SQLite store (yeti-portrait,
+      lawdek-v2, igdek, secdek).
+
+      Rough decision shape:
+      - **Stay on SQLite** if: partitioning + busy_timeout coverage
+        gives us another year of headroom AND Pebble's operational
+        story doesn't measurably win for our query patterns.
+      - **Move to Pebble** if: SQLite contention manifests in
+        user-visible latency OR partition-migrate planning shows
+        we're hitting a ceiling partitioning alone can't fix.
+
+      Don't decide reactively to one alarm fire. Decide on aggregate
+      data: query the `secdek` namespace's `SqliteBusy` metric over
+      the last 30/90 days, plus run `bench_pebble_test.go` and
+      `bench_compare_test.go` on current corpus shape. Then commit
+      and retire whichever path didn't win.
+
 ## Current State (2026-04-13, end of day)
 
 Page clustering works. The HTML review tool is functional. Michelle
