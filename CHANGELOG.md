@@ -28,9 +28,11 @@
   ~68.9 µs (SQLite), 3× faster.
 - 100k-quad bulk load: **305 ms** (Pebble) vs ~764 ms (SQLite),
   2.5× faster.
-- Bulk loads under ~5k rows are slower on Pebble due to the
-  memtable flush at Close; for those, `Open(path)` (SQLite) is
-  still the better choice.
+- On M1 only: bulk loads under ~5k rows pay a fixed memtable-flush
+  cost on `Close` and are slower on Pebble. The crossover
+  disappears on cloud disks — see "Cloud Linux confirms and
+  amplifies" below: at N=1k Pebble is within 13% of SQLite on
+  gp3 EBS, and at N=10k it's already 3× faster.
 
 Full breakdown including durability semantics: see
 [`docs/PEBBLE_VS_SQLITE.md`](./docs/PEBBLE_VS_SQLITE.md).

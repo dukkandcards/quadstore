@@ -10,24 +10,28 @@ import (
 )
 
 // PebbleStore is a Pebble-backed Store. Provides the same write /
-// read / bulk-load surface as *Store (the SQLite-backed default)
-// but wraps a Pebble LSM engine instead.
+// read / bulk-load surface as *Store (the SQLite-backed legacy
+// path) but wraps a Pebble LSM engine instead. Recommended backend
+// going forward; *Store remains supported indefinitely.
 //
 // Pebble wins decisively on point operations (single-quad commit,
-// subject lookups) and large bulk loads at the cost of much heavier
-// dependencies (~20 transitive packages including Sentry and
-// Prometheus client). For most workloads the perf wins justify the
-// cost; for minimal-binary deployments the SQLite-backed Open is
-// still the default.
+// subject lookups), bulk loads at scale, and on-disk size at the
+// cost of heavier dependencies (~20 transitive packages including
+// Sentry and Prometheus client). For minimal-binary deployments or
+// callers needing sqlite3-CLI access on the data file, the
+// SQLite-backed Open is the alternative.
 //
 // See docs/PEBBLE_VS_SQLITE.md for measured deltas.
 //
 // What's NOT in *PebbleStore (yet):
 //   - Partitioning. Multi-directory routing is a v0.3+ concern;
 //     today a Pebble-backed Store is one Pebble dir.
-//   - Match / Path / Stats / CommitStats. Higher-level helpers
-//     remain SQLite-only until ported.
-//   - Migrate compatibility (separate concern).
+//   - Match (legacy *Iterator API). Reader.Find with iter.Seq2 is
+//     the modern equivalent and works on both backends.
+//   - Path traversal helpers (From/Out/In/Has/Unique). Used by
+//     cmd/observe; SQLite-only until ported.
+//   - MigrateFromSnapshot from a Pebble source. SQLite source is
+//     supported via VACUUM INTO; Pebble snapshots not yet exposed.
 type PebbleStore struct {
 	inner *pebbleq.Store
 }

@@ -1,12 +1,13 @@
 # Pebble vs SQLite: head-to-head benchmark
 
-Prototype comparison using identical workloads against two backends:
+Head-to-head comparison using identical workloads against two backends:
 
-- **SQLite-backed quadstore** (current production library, with the
-  recent `Batch.NoAudit` and conditional-prepare optimizations).
-- **Pebble-backed prototype** at `internal/pebbleq/`. Same four-key
-  encoding (SPO/POS/OSP/LSP keyspaces, NUL-separated), default
-  Pebble options other than a quiet logger.
+- **SQLite-backed quadstore** — `quadstore.Open(path)`, with the
+  `Batch.NoAudit` and conditional-prepare optimizations.
+- **Pebble-backed quadstore** — `quadstore.OpenPebble(path)`,
+  internals in `internal/pebbleq/`. Same four-key encoding
+  (SPO/POS/OSP/LSP keyspaces, NUL-separated), default Pebble
+  options other than a quiet logger.
 
 Both backends use **lazy-fsync durability** (SQLite `synchronous=NORMAL`,
 Pebble `pebble.NoSync`). This is the apples-to-apples comparison;
@@ -19,11 +20,11 @@ and amplifies" below.
 
 ## The headline
 
-Pebble wins **5 of 6** decision-gate metrics on M1 Pro after the
-prototype was upgraded to feature parity (audit trail, label
-namespace validation, real `Pattern`-routed Find — see
-[`internal/pebbleq`](../internal/pebbleq/store.go)). Numbers run with
-audit on for the like-for-like row.
+Pebble wins **5 of 6** decision-gate metrics on M1 Pro at full
+feature parity (audit trail, label namespace validation, real
+`Pattern`-routed Find — implementation in
+[`internal/pebbleq`](../internal/pebbleq/store.go)). Numbers run
+with audit on for the like-for-like row.
 
 | operation | SQLite audited | SQLite NoAudit | raw modernc-SQLite | **Pebble audited** | **Pebble NoAudit** | Pebble vs best SQLite |
 |---|---|---|---|---|---|---|
@@ -214,7 +215,7 @@ Three orders of magnitude. The fsync-per-commit semantic is what most
 SQLite's NORMAL mode is the lazy default that everyone uses anyway.
 Comparing across durability levels is comparing different products.
 
-The prototype defaults to `NoSync` to match SQLite's default. A
+The Pebble backend defaults to `NoSync` to match SQLite's default. A
 `Writer.CommitSync` exists for callers who need strict per-commit
 durability. Production use would expose the choice as a `BatchOptions`
 field.
@@ -360,17 +361,17 @@ Honesty list before anyone gets excited:
 - **No concurrent-writers test yet.** The single biggest architectural
   win Pebble offers is "no single-writer ceiling." We haven't
   benchmarked it.
-- **The Pebble prototype now has audit + validation, but no
+- **The Pebble backend has audit + validation, but no
   partitioning.** The audit ceremony (commit row + op rows) and label
   namespace validation are implemented and reflected in the headline
   numbers above. Single-Pebble-dir mode only; multi-partition routing
-  is a v0.3+ concern.
+  on Pebble is a v0.3+ concern.
 - **No 100M-row dataset.** All benches top out at 100k. The full
   shape of the load curve at production scale is unmeasured.
 
 ## Reproduce
 
-Bench file: `bench_pebble_test.go`. Pebble prototype: `internal/pebbleq/`.
+Bench file: `bench_pebble_test.go`. Pebble backend: `pebble_store.go` (public surface) + `internal/pebbleq/` (implementation).
 
 ```sh
 go test -bench='BenchmarkPebble|BenchmarkCommit_SingleQuad$|BenchmarkCommit_SingleQuad_NoAudit|BenchmarkCommit_Batch1k|BenchmarkFind_BySubject|BenchmarkCompare_RawSQLite_BulkLoad|BenchmarkCompare_Quadstore_BulkLoader|BenchmarkCompare_RawSQLite_SingleInsert' \
@@ -387,25 +388,50 @@ Per [`RETHINK_TEST_PLAN.md`](./RETHINK_TEST_PLAN.md) Test 1's rule of
 M1 Pro and **6 of 6** on Linux t4g.large. The 40× single-commit
 advantage on production-class hardware is decisive.
 
+**Pebble is the recommended backend going forward.** New code
+should call `quadstore.OpenPebble(path)`. The SQLite-backed
+`Open(path)` stays supported indefinitely for the cases where
+its tradeoffs win — see "Why use the SQLite backend?" in the
+top-level [README](../README.md).
+
 Status:
 
-1. ✅ Pebble prototype built behind same Reader/Writer/BulkLoader
-   surface (see [`internal/pebbleq`](../internal/pebbleq)).
-2. ✅ Public opt-in API shipped: `quadstore.OpenPebble(path)`
-   returning `*PebbleStore` with full audit + label validation.
-   See `pebble_store.go`. SQLite-backed `Open(path)` stays the
-   default for users who don't want the dep cost.
-3. ✅ Cloud Linux numbers confirm and amplify the M1 result.
-4. **Next:** add `Match` / `Path` / `Stats` / `LabelCounts` /
-   `Migrate` parity on `*PebbleStore`. Until those land, the
-   SQLite backend is the only path for those operations.
-5. **v1.0 question:** does the default flip from SQLite to Pebble?
-   Open. Pebble's transitive-dep cost (~20 packages including
-   Sentry) and lack of "just open in sqlite3 CLI" debuggability
-   are real costs that the speed wins have to outweigh for the
-   default to flip.
+1. ✅ Pebble backend shipped as `quadstore.OpenPebble(path)` →
+   `*PebbleStore` with full audit + label validation. See
+   `pebble_store.go`.
+2. ✅ Reader / Writer / BulkLoader / `LabelCounts` / `Stats` /
+   `CommitStatsAt` parity with the SQLite backend.
+3. ✅ Cross-backend migration via
+   `quadstore.MigrateToPebble(ctx, src, dst, opts)`.
+4. ✅ Cloud Linux numbers confirm and amplify the M1 result
+   (single-commit gap widens M1 18× → Linux 40×; small-N bulk
+   load reversal disappears on real disks).
+5. ✅ Real-data validation: 19,176,859-quad SecDek production
+   graph round-tripped byte-perfectly between backends; 200
+   random subject point-queries with zero mismatches.
 
-This is **not** a recommendation to break existing deployments. The
-SQLite backend stays available indefinitely — multiple minor
-versions, possibly past v1.0 — under `Open(path)`. We publish the
-comparison numbers and let users opt in.
+**Remaining parity gaps on `*PebbleStore`** (will be added on
+concrete user request):
+
+- `Match` — the legacy `*Iterator` API. `Reader.Find` with
+  `iter.Seq2[Quad, error]` is the modern equivalent and works
+  on both backends.
+- `Path` — Cayley-style traversal helpers (`From`, `Out`, `In`,
+  `Has`, `Unique`). Used by `cmd/observe`; the SQLite backend
+  is the only path for now.
+- Partitioning — `OpenPartitioned` is SQLite-only; Pebble runs
+  single-dir today.
+
+**v1.0 question (open):** does `Open()` flip its default to
+Pebble? Pebble's transitive-dep cost (~20 packages including
+Sentry SDK and Prometheus client) and lack of "just open in
+`sqlite3` CLI" debuggability are real costs that the speed
+wins have to outweigh before we change the no-argument
+default. The recommendation in this doc is the answer to "what
+should I call?" — not yet "what does `Open` resolve to?"
+
+This is **not** a recommendation to break existing deployments.
+The SQLite backend stays available indefinitely — multiple minor
+versions, possibly past v1.0 — under `Open(path)`. The
+recommendation is forward-looking: new code calls `OpenPebble`;
+existing SQLite-backed deployments keep running.

@@ -4,13 +4,15 @@ A rigorous self-audit, written 2026-05-05 by the maintainer. Not a roadmap commi
 
 The point of this document: if any of the changes here would be worth measuring, name them. Keep this honest and let the numbers decide.
 
+> **Update — 2026-05-06.** §1 below ("Storage engine: Pebble, not SQLite") has shipped. The Pebble backend is recommended via `quadstore.OpenPebble(path)`; measured numbers and parity status live in [`PEBBLE_VS_SQLITE.md`](./PEBBLE_VS_SQLITE.md). §2-§6 remain forward-looking work that has not yet landed.
+
 ## What we'd keep
 
 These are the choices that have aged well in production. We would make them again.
 
 - **The label namespace.** `source:` / `derived:` / `human:{tenant}/` / `meta:` enforced at write time was the central insight. Every other "should I do X?" question reduces to "what's the label?" and falls out for free. Keep.
 - **Embedded library, single binary.** No server, no port, no auth surface. The smallest correct deployment. Keep.
-- **Pure Go, no CGo.** Cross-compiles trivially, runs on Lambda + distroless without ceremony. The day-one dependency on `modernc.org/sqlite` is the single best engineering decision in the project. Keep.
+- **Pure Go, no CGo.** Cross-compiles trivially, runs on Lambda + distroless without ceremony. The day-one constraint of "ship a binary, no toolchain dance" was the single best engineering decision in the project — `modernc.org/sqlite` for the SQLite path, Pebble itself for the LSM path, both pure Go. Keep.
 - **Reader / Writer / Batch / BulkLoader API surface.** Audit shows ~2% Go overhead vs hand-rolled at the same schema. The interface was right; it was designed to outlive its first backend. Keep.
 - **`iter.Seq2[Quad, error]` reads.** Range-over-func is the right shape for stream-shaped reads. Keep.
 - **Provenance / audit as a write-time invariant** rather than a separate observability tool. Keep, with the new `Batch.NoAudit` opt-out for hot paths.
@@ -20,29 +22,15 @@ These are the choices that have aged well in production. We would make them agai
 
 These are the parts where, with the benefit of running it in production, we would pick differently.
 
-### 1. Storage engine: Pebble, not SQLite
+### 1. Storage engine: Pebble, not SQLite — ✅ shipped v0.2
 
-**The single most consequential change we'd make.**
+**The single most consequential change we made.**
 
-SQLite is a phenomenal piece of software. We use it as a key-value store with a B-tree index manager bolted on top, and we pay for SQL we never invoke. The structural costs that show up in [`docs/LIMITATIONS.md`](./LIMITATIONS.md) all come from the same place:
+SQLite is a phenomenal piece of software. We were using it as a key-value store with a B-tree index manager bolted on top, paying for SQL we never invoked. The structural costs in [`docs/LIMITATIONS.md`](./LIMITATIONS.md) all came from the same place: single-writer per file, B-tree secondary indexes that need a `DROP / load / CREATE INDEX` dance on bulk loads, `INSERT OR IGNORE` paying a UNIQUE check on every write, no parallelism on index build (`modernc/sqlite` doesn't support it), all values `TEXT` with no native typed storage.
 
-- Single-writer per file (SQLite hard rule).
-- Secondary indexes are B-trees; bulk loading them requires a `DROP / load / CREATE INDEX` dance whose `CREATE INDEX` step dominates large loads (>30 min observed at 157M rows).
-- `INSERT OR IGNORE` is a UNIQUE constraint check on every write.
-- No parallelism on index build — `modernc/sqlite` doesn't support it.
-- All values are `TEXT`; no native typed storage.
+Most of those vanish on a log-structured merge backend. **[Pebble](https://github.com/cockroachdb/pebble) shipped as `quadstore.OpenPebble(path)` in v0.2.** Pure-Go (no CGo), Apache 2.0 / BSD-3, the same Reader / Writer / BulkLoader / `LabelCounts` / `Stats` / `CommitStatsAt` surface as the SQLite backend. Cross-backend migration via `quadstore.MigrateToPebble`.
 
-Most of those vanish on a log-structured merge (LSM) backend. [Pebble](https://github.com/cockroachdb/pebble) (CockroachDB's storage engine, pure-Go, Apache 2.0) was built to host a transactional SQL database; it gives us:
-
-- **No single-writer ceiling.** MVCC + concurrent batchers. Two goroutines streaming quads from different sources land in parallel.
-- **No index rebuild step.** sstables are append-only and sorted at write time. There is nothing to rebuild on close.
-- **Bloom filters per sstable.** Point lookups (`Find` by full quad) are cheap even with millions of sstables.
-- **Built-in zstd block compression.** ~3-5× on-disk reduction for typical predicate/object content.
-- **Pure Go.** Matches our deploy-as-a-binary promise.
-
-**What we'd build on top of Pebble:**
-
-A quadstore is naturally four keyspaces, one per index direction. Pebble gives us four CFs (column families) trivially:
+**Architecture as built.** A quadstore is naturally four keyspaces, one per index direction. Pebble exposes them as four key prefixes inside one DB:
 
 ```
 spo: <subject>\0<predicate>\0<object>\0<label>  → ε
@@ -51,20 +39,29 @@ osp: <object>\0<subject>\0<predicate>\0<label>  → ε
 lsp: <label>\0<subject>\0<predicate>\0<object>  → ε
 ```
 
-Empty values, zero-byte separators (or varint-prefixed lengths), prefix scans for the natural query shapes. A `Pattern` lookup picks the keyspace by the bound prefix and does a single iterator. No JOIN, no query planner, no surprises.
+Empty values, zero-byte separators, prefix scans for the natural query shapes. A `Pattern` lookup picks the keyspace by bound prefix and does a single iterator. The audit trail (`commits` + `commit_ops`) is mirrored as additional keyspaces (`'c' | commitID` and `'C' | commitID | seq`) with the same logical semantics as the SQLite tables.
 
-A `Writer.Commit` is now a single `Pebble.Apply(WriteBatch)` of 4 puts per quad. No prepare, no fsync per write (Pebble flushes WAL on commit), no index rebuild. The expected single-quad commit cost is on the order of **10-20 µs** including audit rows — a 4-6× improvement on the current 60-108 µs.
+**Measured wins (full breakdown in [`PEBBLE_VS_SQLITE.md`](./PEBBLE_VS_SQLITE.md)):**
 
-A `BulkLoader` becomes "merge sorted batches into sstables." The 22% index-rebuild tax in our current profile goes to zero. Concurrent BulkLoaders against different keyspaces run truly in parallel. A 10 M quad load that takes ~75 seconds today would land in the **5-15 second range**.
+- Single-quad audited Commit on cloud Linux (gp3 EBS): **9.6 µs Pebble vs 384 µs SQLite — 40× faster.** On M1: 5.95 µs vs 107 µs — 18× faster.
+- 1k-quad batch commit: **2.1× faster on M1, 4.5× faster on Linux.**
+- 100k-quad bulk load: **2.5× faster on M1, 5.5× faster on Linux.** The "sstables are sorted on write, no rebuild step" advantage is a clean ~22% of total cost on the SQLite path.
+- Find by subject (~100 rows from 10k): **3× faster on M1.**
+- On-disk size: **≈10×** smaller at production scale — a 19,176,859-quad SecDek snapshot went from 28 GB SQLite → ~3 GB Pebble dir, default zstd block compression doing the work.
+- Real-data round-trip: 19M-quad migration produced byte-identical subjects-hash and predicates-hash; 200 random subject point queries with zero mismatches.
 
-**Honest tradeoffs:**
+**The expected 10-20 µs single-commit target landed under it** — 5.95 µs on M1, 9.6 µs on Linux. The 4-6× improvement we forecast turned out to be 18-40×. The cloud-disk delta widening past the M1 numbers is the part we couldn't have predicted from a laptop.
 
-- We own the index management. Today SQLite manages it; tomorrow we write the multi-keyspace `Apply` + the iterator-merge for `Pattern` reads. That's ~500-1000 lines of new code.
-- No SQL escape hatch. `sqlite3 quads.db` is genuinely useful for ad-hoc inspection. Replacement: a `cmd/quadq` REPL that takes a `Pattern` and prints rows.
-- Read amplification is real on LSM. Without Bloom filters tuned + compaction policy tuned, point lookups can touch many sstables. Pebble handles most of this; we'd need to tune the rest.
-- Tooling story changes. No `.dump`, no `EXPLAIN QUERY PLAN`. We'd need a `cmd/quadstore-inspect` for compaction stats, sstable-level info.
+**Honest tradeoffs (still as forecast):**
 
-We would still ship a SQLite *export* target for compatibility — a `Migrate` destination that materializes the Pebble store as SQLite for users who want SQL escape hatch on a snapshot.
+- We own the index management — `pebble_store.go` is ~1k lines of multi-keyspace `Apply` + iterator-merge for `Pattern` reads. Forecast was 500-1000 lines; landed in that range.
+- No SQL escape hatch. `sqlite3 quads.db` is genuinely useful for ad-hoc inspection. We have not yet built `cmd/quadstore-inspect`. Open work.
+- Read amplification on LSM. Pebble's defaults handle most of it; we have not yet had to tune compaction policy or Bloom filters in production.
+- Tooling story changes. No `.dump`, no `EXPLAIN QUERY PLAN`. Acceptable for now; will be papered over by a `cmd/quadstore-inspect` REPL when operators ask.
+
+**SQLite stays supported.** `quadstore.Open(path)` is the legacy backend, kept for callers who want ~20 fewer transitive deps, smaller binaries, or `sqlite3`-CLI access on the data file. See [`README.md`](../README.md) "Why use the SQLite backend?" for the criteria. Whether `Open()` flips its default backend at v1.0 is open — see [`PEBBLE_VS_SQLITE.md`](./PEBBLE_VS_SQLITE.md) §Decision.
+
+**Parity gaps still open on `*PebbleStore`** (will be added on user request): legacy `*Iterator` `Match`, Cayley-style `Path` traversal helpers (`From`/`Out`/`In`/`Has`/`Unique`), `OpenPartitioned`. Listed in [`LIMITATIONS.md`](./LIMITATIONS.md) "Pebble-only sharp edges."
 
 ### 2. Predicate dictionary from day one
 
@@ -112,9 +109,19 @@ This is purely a producer-side improvement; the API surface doesn't need to chan
 
 ## What we'd test before committing
 
-A redesign isn't worth doing on intuition. Three measurements would change our minds:
+A redesign isn't worth doing on intuition. Three measurements would change our minds.
 
-### Test 1: Pebble vs SQLite, head-to-head, same API
+> **Status — 2026-05-06.** Tests 1 and 2 have been run. Test 1's
+> rule was "ship the rewrite if Pebble wins on at least 3 of 5
+> metrics." Pebble won 5 of 6 on M1 and 6 of 6 on Linux gp3 —
+> documented in [`PEBBLE_VS_SQLITE.md`](./PEBBLE_VS_SQLITE.md).
+> Test 2's cloud-Linux numbers landed in the same doc. Test 3's
+> storage-density question is partially answered by the real-data
+> 19M-quad SecDek round-trip (28 GB → ~3 GB, ≈10× compression);
+> the predicate-dictionary alone-and-stacked measurements are
+> still open.
+
+### Test 1: Pebble vs SQLite, head-to-head, same API — ✅ satisfied
 
 Build a `quadstore-pebble` package behind the same `Store` / `Reader` / `Writer` / `BulkLoader` interfaces. Run identical workloads against both:
 
@@ -128,9 +135,9 @@ Build a `quadstore-pebble` package behind the same `Store` / `Reader` / `Writer`
 
 If Pebble wins on **at least three** of those, we ship the rewrite. If it loses on more than one, we don't.
 
-### Test 2: M1 Pro vs cloud Linux
+### Test 2: M1 Pro vs cloud Linux — ✅ satisfied
 
-The current PERFORMANCE.md numbers are M1 Pro. M1 has unrealistically fast SSDs and aggressive thermal throttling under sustained load. Production deployments are typically Linux on cloud instances. We need numbers from there.
+The original PERFORMANCE.md numbers were M1 Pro only. M1 has unrealistically fast SSDs and aggressive thermal throttling under sustained load. Production deployments are typically Linux on cloud instances. We need numbers from there.
 
 A `t4g.large` (4 vCPU / 8 GB / gp3 EBS) gives us:
 
@@ -141,7 +148,9 @@ A `t4g.large` (4 vCPU / 8 GB / gp3 EBS) gives us:
 
 We'd run the **same** benchmark suite on both and publish the deltas. The library shouldn't behave qualitatively differently on cloud Linux, but the *numbers* will. Today's PERFORMANCE.md is M1-only and that's a small honesty gap.
 
-### Test 3: Storage density at scale
+### Test 3: Storage density at scale — partially satisfied
+
+Real-data 19M-quad SecDek round-trip showed ≈10× compression (28 GB SQLite → ~3 GB Pebble), default zstd block compression doing the work. The predicate-dictionary alone-and-stacked measurements below are still open — they're the path to making §2 ("Predicate dictionary from day one") a measured decision rather than an intuition.
 
 Build a 100 M-quad synthetic corpus modeled on the SecDek shape (140 distinct predicates, high-cardinality subjects, mixed-type objects). Measure on-disk size for:
 

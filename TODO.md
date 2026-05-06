@@ -1,38 +1,59 @@
 # Quad Store — TODO
 
-## Backend decision: SQLite vs Pebble (2026-05-06)
+## Backend direction (2026-05-06): Pebble is the path
 
-- [ ] **Decide whether to graduate the Pebble prototype or commit to SQLite.**
-      `pebble_store.go` + bench/torture tests have lived alongside the
-      SQLite path for weeks; SQLite remains the production backend
-      (called via `Open` / `OpenPartitioned`). Decision-relevant memory:
-      `project_quadstore_backend_swap.md`,
-      `project_quadstore_optimization_backlog.md`,
-      `project_quadstore_research_state.md`.
+The library ships two backends. **`OpenPebble` is the recommended
+backend going forward**; `Open` (SQLite) stays supported indefinitely
+for callers who want ~20 fewer transitive deps, smaller binaries, or
+`sqlite3`-CLI access on the data file. Public framing in
+[`README.md`](./README.md) "Why use the SQLite backend?" and
+[`docs/PEBBLE_VS_SQLITE.md`](./docs/PEBBLE_VS_SQLITE.md) §Decision.
 
-      Forcing function: **secdek-sqlite-busy** is a live production
-      alarm with a runbook — every concurrent-writer contention event
-      is real visible operational cost. If SQLite is the long-term
-      answer, the boot-fanout race needs a structural fix (per-subject
-      sentinel discipline already documented at
-      `~/secdek/docs/INGEST_CONVENTION.md`); if Pebble is the answer,
-      the swap needs a migration plan that doesn't break the four
-      products currently consuming the SQLite store (yeti-portrait,
-      lawdek-v2, igdek, secdek).
+### Library-level open work
 
-      Rough decision shape:
-      - **Stay on SQLite** if: partitioning + busy_timeout coverage
-        gives us another year of headroom AND Pebble's operational
-        story doesn't measurably win for our query patterns.
-      - **Move to Pebble** if: SQLite contention manifests in
-        user-visible latency OR partition-migrate planning shows
-        we're hitting a ceiling partitioning alone can't fix.
+- [ ] **`Match` parity on `*PebbleStore`.** Legacy `*Iterator` API
+      (`Quad`/`Next`/`Err`/`Close`). `Reader.Find` with `iter.Seq2`
+      is the modern path and works on both backends — `Match` is
+      still SQLite-only for callers who haven't migrated.
+- [ ] **`Path` parity on `*PebbleStore`.** Cayley-style traversal
+      helpers (`From`/`Out`/`In`/`Has`/`Unique`/`All`/`Count`/`First`).
+      Used by `cmd/observe`. SQLite is the only path until a Pebble
+      consumer asks.
+- [ ] **`OpenPartitioned` on Pebble.** Single-dir today. Routing
+      surface is identical (`LabelRouter` / `PatternRouter` /
+      `WriterFor`); the implementation is "N independent Pebble
+      dirs behind the same partitioned-Store wrapper."
+- [ ] **`MigrateFromSnapshot` on Pebble sources.** Today the
+      snapshot path uses SQLite's `VACUUM INTO`. Pebble has its own
+      snapshot API; expose it at the `quadstore` surface so
+      Pebble→Pebble race-free migration becomes possible.
+- [ ] **`cmd/quadstore-inspect` REPL.** Compaction stats,
+      sstable-level info, ad-hoc Pattern queries. Pebble lacks the
+      `sqlite3`-CLI escape hatch; this is the replacement when
+      operators start asking for one.
 
-      Don't decide reactively to one alarm fire. Decide on aggregate
-      data: query the `secdek` namespace's `SqliteBusy` metric over
-      the last 30/90 days, plus run `bench_pebble_test.go` and
-      `bench_compare_test.go` on current corpus shape. Then commit
-      and retire whichever path didn't win.
+### Consumer-level open work (per-product migration)
+
+Forcing function for SecDek migration: **secdek-sqlite-busy** is a
+live production alarm. The 19M-quad SecDek snapshot already
+round-trips byte-perfectly via `MigrateToPebble` — see
+`docs/bench-output/secdek-correctness-2026-05-05.txt`. Production
+cutover is a separate plan owned by the SecDek repo, not by
+quadstore.
+
+Each consumer (yeti-portrait, lawdek-v2, igdek, secdek) chooses
+independently based on whether dep size, binary size, or
+`sqlite3`-CLI access matters more than per-commit latency for that
+product. Lambda-bound products may stay on SQLite for binary-size
+reasons even after this decision.
+
+### v1.0 open question
+
+Does `quadstore.Open(path)` (no `Pebble` suffix) flip its default
+backend from SQLite to Pebble? Open. The recommendation in this
+file is "what should I call?" not "what does the no-arg name
+resolve to?" — flipping the no-arg default is a v1.0-scope
+breaking change and we haven't pulled the trigger.
 
 ## Current State (2026-04-13, end of day)
 
@@ -302,7 +323,10 @@ optimizing the median wastes effort because the median was never slow.)
       readers; but BulkLoader sets `journal_mode=MEMORY` for its life,
       which may serialize readers. Audit + document expected behavior.
 
-#### Rung 5 — backend swap (SQLite → LSM) — flagged 2026-04-19
+#### Rung 5 — backend swap (SQLite → LSM) — ✅ resolved as Pebble (v0.2)
+
+> **Superseded by the top entry of this TODO.** This subsection captures the design discussion that happened before Pebble shipped — DuckDB was a candidate, partition-per-corpus was track 1, the analytical/columnar argument was real. The decision landed on Pebble in v0.2; the head of this file has the current direction. Section retained for searchability of the original reasoning.
+
 SQLite is approaching its design ceiling for this workload (single
 writer, B-tree + WAL = bulk-load index rebuild dominates, TEXT-only
 columns inflate storage). We always planned to swap (the Reader/Writer/
