@@ -41,11 +41,26 @@ round-trips byte-perfectly via `MigrateToPebble` — see
 cutover is a separate plan owned by the SecDek repo, not by
 quadstore.
 
-Each consumer (yeti-portrait, lawdek-v2, igdek, secdek) chooses
-independently based on whether dep size, binary size, or
-`sqlite3`-CLI access matters more than per-commit latency for that
-product. Lambda-bound products may stay on SQLite for binary-size
-reasons even after this decision.
+#### Active: SecDek SQLite (partitioned) → Pebble (single dir)
+
+In progress as of 2026-05-06. SecDek is the first real-world
+cutover from `OpenPartitioned` to `OpenPebble`. Going with
+**Option B** from `docs/MIGRATING_TO_PEBBLE.md`: consolidate
+the two-partition SQLite layout into one Pebble dir on the
+hypothesis that Pebble's LSM + per-sstable Bloom filters
+remove the B-tree dilution problem partitioning was solving
+in SQLite. **Live experiment** — measurements come back into
+the migration guide's "Case study" section as they land,
+positive or negative. If consolidation underperforms, the
+fallback is Option A (build `OpenPartitioned` on Pebble in
+this library).
+
+Each other consumer (yeti-portrait/SlideDek, lawdek-v2,
+igdek) chooses independently based on whether dep size, binary
+size, or `sqlite3`-CLI access matters more than per-commit
+latency for that product. Lambda-bound products may stay on
+SQLite for binary-size reasons even after this decision —
+LawDek-v2 is the canonical "stay on SQLite" case for now.
 
 ### v1.0 open question
 

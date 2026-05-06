@@ -180,6 +180,7 @@ The Pebble backend (recommended as of v0.2) stands on [**Pebble**](https://githu
 - [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md) — every known way this is worse than what you might have hoped for; read before adopting
 - [`docs/RETHINK_2026.md`](./docs/RETHINK_2026.md) — self-audit: §1 (storage engine) shipped as Pebble in v0.2; §2-§6 still forward-looking
 - [`docs/PEBBLE_VS_SQLITE.md`](./docs/PEBBLE_VS_SQLITE.md) — head-to-head bench numbers (5 of 6 metrics Pebble on M1, 6 of 6 on Linux gp3) and the v1.0 default-flip question
+- [`docs/MIGRATING_TO_PEBBLE.md`](./docs/MIGRATING_TO_PEBBLE.md) — practical migration guide; includes the SecDek experiment-in-progress (consolidating partitioned SQLite into a single Pebble dir)
 - [`docs/PARTITIONING_DESIGN.md`](./docs/PARTITIONING_DESIGN.md) — partition routing model and migration semantics
 - [`docs/INCREMENTAL_PROCESSING.md`](./docs/INCREMENTAL_PROCESSING.md) — patterns for ingest pipelines that don't re-derive the whole world every tick
 - [`CHANGELOG.md`](./CHANGELOG.md) — version history with breaking-change callouts
