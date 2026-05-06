@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.3-track — 2026-05-06 — Per-label counter (Pebble Merge)
+
+### Added
+- **Per-label counter keyspace on the Pebble backend.** New `'L'` keyspace (`'L' | label → 8-byte LE int64`) maintained via Pebble's [Merge operator](https://github.com/cockroachdb/pebble) on every `Writer.Commit` and `BulkLoader.flush`. Turns `Reader.Count(Pattern{Label: X})` into a single 8-byte `Get` — measured **5,418× faster** than the SQLite covering-index baseline on a 16.15M-quad SecDek snapshot. See [`docs/MIGRATING_TO_PEBBLE.md`](docs/MIGRATING_TO_PEBBLE.md) "Hot-read benchmark" for the before/after table.
+- **`Store.RebuildLabelCounters()`** — walks the LSP keyspace, computes per-label totals, replaces the `'L'` keyspace atomically (DeleteRange + Sets in one batch). Use after migrations that bypass the Merge path or any time drift is suspected.
+- 6 unit tests in `internal/pebbleq/labelcount_test.go` covering: counter increments via Commit, decrements via Removes, BulkLoader counter persistence, fast-path matches slow-path, RebuildLabelCounters resets to truth, counters survive close+reopen.
+
+### Compatibility / breaking change
+- **The Pebble backend now registers a custom Merger** (name: `quadstore.label-count.v1`). Existing Pebble dirs created before this change were opened with `pebble.DefaultMerger` (name: `pebble.concatenate`); attempting to open them with the new code raises a merger-name mismatch. The pre-v0.3 Pebble backend was opt-in (`OpenPebble`) and not yet running in production — known fresh dirs need recreating from source via `MigrateToPebble`. Documented as the v0.3-track migration step.
+
+### Performance
+- Per-Commit overhead: one `wb.Merge` per distinct label per batch. Measured ~9% slowdown on overall migration time vs the pre-merger path (15m26s → 17m1.9s on a 16.15M-quad SecDek snapshot, t4g.xlarge / gp3 EBS). The trade-off is unconditionally favorable for any workload that reads `Reader.Count(Pattern{Label: X})`.
+- `Reader.Count(Pattern{Label: X})` fast path: ~10 µs (single 8-byte `Get`) regardless of how many quads are under that label. Other Count patterns continue to use the iter-and-count slow path.
+
+### Real-data validation
+- Re-ran `cmd/pebble-correctness` on the 16.15M-quad / 30 GB SecDek production snapshot end-to-end with the new merger. All correctness checks pass: total quads match, distinct subjects/predicates hashes match (`c7dc26f4c0ff0c4f` / `86f7eac73ed4f9b8`), 200 random subject point queries with zero mismatches. Pebble dir size: 2.9 GB (≈10× compression vs 30 GB SQLite source). Raw archive: [`docs/bench-output/secdek-correctness-with-labelcount-merger-2026-05-06.log`](./docs/bench-output/secdek-correctness-with-labelcount-merger-2026-05-06.log).
+
 ## v0.2.0 — 2026-05-05 — Pebble backend (opt-in)
 
 ### Added

@@ -11,6 +11,31 @@ for callers who want ~20 fewer transitive deps, smaller binaries, or
 
 ### Library-level open work
 
+- [x] **Per-label counter on Pebble (Merge operator).** Closed
+      2026-05-06 in v0.3-track. `Reader.Count(Pattern{Label:X})`
+      is now O(1) on Pebble — measured 5,418× faster than the
+      SQLite covering-index baseline. `Store.RebuildLabelCounters()`
+      handles drift recovery. See `internal/pebbleq/labelcount.go`.
+- [ ] **`BulkLoader.IngestSorted` (Pebble bulk-ingest fast path).**
+      The big migration-time win. Three-level ladder per
+      `docs/MIGRATING_TO_PEBBLE.md` "Why migration takes the time
+      it does":
+      1. **In-memory sort** — sort all quads' four-key encodings
+         in RAM, write per-keyspace sorted sstables via
+         `pebble/sstable.Writer`, hand them to `db.Ingest`.
+         Right for ≤ ~10M-quad corpora on a 16 GB box.
+      2. **External merge sort** — channel-fed, write sorted
+         chunks to disk, k-way merge. Bounded memory at any
+         corpus size. Right for SlideDek-class workloads.
+      3. **Per-corpus driver pattern** — caller groups by
+         corpus, library treats each as a separate `IngestSorted`
+         call into the same Pebble dir. Documented as a usage
+         pattern, not a new API. Best fit for the SlideDek
+         ArangoDB → quadstore port shape.
+      Measured baseline to beat: 15-17K quads/sec on the standard
+      `BulkLoader` path; CockroachDB's IngestExternalFiles
+      experience says 5-10× faster. Targeting ~80-150K quads/sec
+      sustained.
 - [ ] **`Match` parity on `*PebbleStore`.** Legacy `*Iterator` API
       (`Quad`/`Next`/`Err`/`Close`). `Reader.Find` with `iter.Seq2`
       is the modern path and works on both backends — `Match` is

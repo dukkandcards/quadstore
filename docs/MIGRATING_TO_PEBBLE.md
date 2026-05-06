@@ -4,18 +4,21 @@ A practical guide for moving an existing SQLite-backed quadstore deployment to t
 
 This is **not** a "you must migrate" doc. The SQLite backend is supported indefinitely. Migrate when the tradeoffs add up for your deployment — and stop when they don't. The guide below is the framework for deciding *and* the mechanics for executing.
 
-> **Live experiment status (started 2026-05-06).** SecDek is the
-> first real-world cutover from partitioned SQLite to a single
-> Pebble dir (Option B below). The hypothesis under test:
-> *Pebble's LSM + Bloom-filter shape removes the B-tree dilution
-> problem that forced SQLite-side partitioning, so consolidating
-> SecDek's two-partition layout (`main.db` + `corpus.db`) into
-> one Pebble dir wins or breaks even on the hot reads while
-> halving operational complexity.* Updates will land in this
-> doc's "Case study" section as measurements come in. If the
-> experiment fails, this doc will say so explicitly — that
-> outcome is just as useful for the next person as the success
-> case.
+> **Live experiment status (resolved 2026-05-06).** SecDek's
+> production state turned out to be single-file SQLite (the
+> partition migration was tooled but never deployed), so the
+> Option-B "consolidate two partitions" hypothesis didn't apply
+> — the migration is just `single-file SQLite → single-Pebble
+> dir`. The first hot-read bench surfaced a real structural gap:
+> Pebble's `Reader.Count(Pattern{Label: X})` was 4-5× **slower**
+> than SQLite's covering-index path (180 ms vs 38 ms). Fix
+> shipped: a per-label counter keyspace maintained via Pebble's
+> Merge operator. After the fix, Pebble is **5,418× faster**
+> than SQLite on the same query (0.01 ms vs 38 ms) — full
+> numbers and methodology in the "Case study" section below.
+> The cutover is now ready to plan; the IngestSorted bulk-ingest
+> fast path is queued as the next library improvement for
+> larger-than-SecDek consumers.
 
 ## Decide whether to migrate at all
 
@@ -127,6 +130,31 @@ The SecDek 2026-05-05 round-trip was a clean correctness check. Generalized:
 
 `cmd/pebble-correctness` in the quadstore repo is the reference tool. Copy its shape and adapt.
 
+### How the 200 random point queries work (and what they can / can't catch)
+
+The "200 random subject point queries; 0 mismatches" line in `cmd/pebble-correctness`'s output is the strongest single correctness signal in the sweep. The mechanics:
+
+1. **Build the subject pool.** Full-scan the source DB once, collect every distinct subject string into a sorted list. (Read-only; the sort makes the index reproducible from run to run.)
+2. **Pick *n* random indices.** Use `math/rand` with a deterministic seed (default `1`; configurable via `-seed`). Same seed = same 200 subjects across re-runs; investigating an intermittent failure becomes "rerun with the same seed and look at exactly that subject."
+3. **For each chosen subject S, compare row sets.**
+   - `srcRows = source.Reader().Find(Pattern{Subject: S})` — every quad in the source whose subject is S.
+   - `dstRows = dest.Reader().Find(Pattern{Subject: S})` — same on the destination.
+   - Assert set-equal: same set of `(subject, predicate, object, label)` tuples on both sides. Ordering is not required; multiplicity is (no missing or duplicate quads).
+4. **Report `n / m mismatches / X.X seconds`.** Zero mismatches means every sampled subject's full row set survived the round-trip byte-for-byte. Non-zero mismatches abort the sweep and log the failing subject(s); the log line is the diagnostic starting point.
+
+**What this catches:**
+- Quads dropped on the destination side (set-cardinality mismatch).
+- Quads accidentally duplicated.
+- Predicate / object / label corruption that count alone wouldn't notice (a `(s,p,o,l)` tuple that's wrong is a different set element from the right one).
+- Encoding bugs that affect specific string shapes (Unicode, empty strings, near-NUL bytes, very long values) — proportional to how many of those shapes are sampled.
+
+**What this does NOT catch:**
+- Bugs in subjects we didn't sample. With 200 samples on a ~1.7M-subject corpus, that's a 0.012% sample rate. Per Chernoff-style bounds, this catches a 1%-affecting corruption with ~87% probability and a 5%-affecting corruption with ~99.996% probability — but a 0.01%-affecting corruption (e.g., a single subject's quads got dropped) we'd likely miss. Bump `-sample` for higher confidence.
+- Bugs in the *commit_ops* journal (audit trail). The sweep only validates current-state quads. The audit-trail round-trip is a v0.2 known limitation — `MigrateToPebble` does not preserve `commits` / `commit_ops` from the source.
+- Performance regressions. Correctness sweep ≠ benchmark. Run the read-side benchmark separately.
+
+**Tuning the sweep for your corpus.** The default 200 is the SecDek-validated number; for very large corpora (>10M subjects) push `-sample` up; for smaller corpora (<100k subjects) the default is already overkill. Cost per sample is two `Find` calls per subject — negligible compared to the upstream baseline scan.
+
 ## Cutover and rollback
 
 A few principles from the SecDek planning that generalize:
@@ -138,19 +166,74 @@ A few principles from the SecDek planning that generalize:
 
 ## Case study: SecDek (data point for sizing your own work)
 
-| Dimension | SecDek value |
+| Dimension | SecDek value (refreshed 2026-05-06) |
 |---|---|
 | Live URL | https://sfy.io |
-| Hosting | EC2 t4g.small, gp3 EBS, systemd |
+| Hosting | EC2 t4g.large, gp3 EBS, systemd |
 | Workload | Letter graph + comment-letter corpus + counsel network + EDGAR/USPTO joins |
-| Data volume | 19,176,859 quads / 28 GB SQLite (post comment-letter expansion) |
-| Distinct predicates | 337 |
-| Distinct subjects | 2,688,183 |
-| Production shape | Partitioned (`main.db` + `corpus.db`) since 2026-05-05 |
-| Measured Pebble migration | 15 min 36 sec at 20,478 quads/sec (single-file source → single Pebble dir, t4g.xlarge bench) |
-| Measured Pebble dir size | ~3 GB (≈10× compression vs 28 GB SQLite) |
-| Correctness | Subjects-hash + predicates-hash matched byte-for-byte; 200 random subject point-queries with zero mismatches |
-| Status | **Option B chosen 2026-05-06.** Pebble validated end-to-end on the single-file SQLite snapshot (2026-05-05). Next step: consolidate `main.db` + `corpus.db` into one Pebble dir on a t4g.xlarge bench host, measure size + hot-read latency vs current partitioned production, decide cutover. Results will be written back into this section as they land. |
+| Production shape | **Single-file SQLite at `/var/lib/secdek/secdek.db`.** The partition split discussed in earlier drafts of this guide was tooled (`cmd/partition-migrate`) but never deployed — production was always single-file. The "Option B" framing above is therefore moot for SecDek specifically; the migration is a straightforward single-file → single-Pebble cutover. The three-options framework (A / B / C) still applies for any consumer that *did* deploy partitioned SQLite. |
+| Data volume (snapshot 2026-05-06) | **16,155,295 quads / 30 GB SQLite** (snapshot taken 09:29 UTC; corpus is ~15-30% smaller in quad count than 2026-05-05's 19M because a `regen-graph` cycle had recently rebuilt `derived:*`. DB size grew despite fewer quads because the `commit_ops` journal accumulates separately.) |
+| Distinct predicates | 340 |
+| Distinct subjects | 1,733,370 |
+| Bench host | EC2 `t4g.xlarge` arm64, 120 GB gp3 EBS, Ubuntu 24.04 |
+| Pebble migration time | **15 min 26 sec** end-to-end (`MigrateToPebble` of 16.15M quads at 17,444 quads/sec sustained) |
+| Pebble dir size | **2.6 GB** (vs 30 GB SQLite source → **≈11.5× smaller on disk**) |
+| Correctness sweep | Total quad count matches; distinct-predicates count matches; subjects-hash matches (`c7dc26f4c0ff0c4f`); predicates-hash matches (`86f7eac73ed4f9b8`); 200 random subject point queries with **zero mismatches** in 0.8s |
+| Read scan (full-Count): SQLite vs Pebble | 159.0s vs **13.7s** (~12× faster on Pebble) |
+| Read scan (distinct subjects + predicates): SQLite vs Pebble | 319.7s vs **18.0s** (~18× faster on Pebble) |
+| Hot-read benchmark (subject point lookups, label scopes) | *— filled in after `secdek-pebble-bench` run completes; see "Hot-read benchmark" subsection below* |
+| Cost (one-shot bench host) | t4g.xlarge for ~1 hour + 120 GB gp3 = ~$0.14 of EC2 time |
+| Status | **Migration validated end-to-end on real production data 2026-05-06.** The next decision is the read-benchmark outcome — if Pebble's hot-page latency is competitive with or faster than SQLite, cutover proceeds (planned separately, not on bench-day). If reads regress, falling back to Option A in the migration framework is the next library-side work. |
+
+### Hot-read benchmark
+
+Methodology: identical workload primitives (subject point lookups in the
+primary namespace, label-scoped `Reader.Count` across four label
+namespaces) replayed against both backends; 2 warmup + 10 hot iterations
+each; deterministic seed (`-seed 1`); p50 / p99 reported. Full-corpus
+iteration is intentionally skipped here because it's already covered by
+the `pebble-correctness` correctness sweep (Phase 1 SQLite full scan
+vs Phase 3 Pebble full scan, above).
+
+**First run, before the label-count merger fix:**
+
+| pattern | SQLite p50 | SQLite p99 | Pebble p50 | Pebble p99 | speedup |
+|---|---|---|---|---|---|
+| subject-letter (200 random subjects) | 17.66 ms | 17.83 ms | 3.81 ms | 3.86 ms | **4.64× Pebble** |
+| `Reader.Count(Pattern{Label: "source:sec-letter"})` | 38.05 ms | 38.22 ms | 179.98 ms | 209.58 ms | **0.21× — SQLite wins** |
+| `Reader.Count(Pattern{Label: "source:cmt-pipeline"})` | 0.02 ms | 0.03 ms | 0.00 ms | 0.01 ms | (empty namespace post-regen-graph) |
+| `Reader.Count(Pattern{Label: "derived:counsel-graph"})` | 0.02 ms | 0.02 ms | 0.01 ms | 0.01 ms | (empty) |
+| `Reader.Count(Pattern{Label: "derived:cluster"})` | 2.13 ms | 2.19 ms | 8.61 ms | 9.21 ms | **0.25× — SQLite wins** |
+
+Subject point lookups (the dominant analyst hot-path query shape) win cleanly on Pebble. But **SQLite beats Pebble 4-5× on `Reader.Count(Pattern{Label: X})`** — SQLite uses the covering `idx_lsp(label, subject, predicate)` index for an O(log N) descent, while Pebble was iterating the LSP keyspace and counting tuples in O(N). Raw archive: [`secdek-bench-no-labelcount-merger-2026-05-06.log`](./bench-output/secdek-bench-no-labelcount-merger-2026-05-06.log).
+
+**The fix: a per-label counter keyspace maintained via Pebble's Merge operator.**
+
+Added `'L' | label → 8-byte LE int64` keyspace, registered a custom Pebble Merger that interprets values as int64 deltas and sums them associatively. `Writer.Commit` aggregates per-label deltas across `Adds` and `Removes` and issues one `wb.Merge` per affected label per batch; `BulkLoader.flush` does the same once per flush. `Reader.Count(Pattern{Label: X})` short-circuits to a single 8-byte `Get` on the counter keyspace. `Store.RebuildLabelCounters()` walks the LSP keyspace and resets the counter to truth — used after migrations or to recover from drift. ~250 lines + 6 unit tests in `internal/pebbleq/labelcount.go`. Per-Commit overhead: one `Merge` per distinct label per batch; in this run it cost ~9% on overall migration time (15m26s → 17m1.9s for 16.15M quads).
+
+**Second run, with the label-count merger active on the destination Pebble dir:**
+
+| pattern | SQLite p50 | SQLite p99 | Pebble p50 | Pebble p99 | speedup |
+|---|---|---|---|---|---|
+| subject-letter (200 random subjects) | 17.66 ms | 18.58 ms | 3.75 ms | 3.83 ms | **4.71× Pebble** |
+| `Reader.Count(Pattern{Label: "source:sec-letter"})` | 37.93 ms | 38.12 ms | **0.01 ms** | **0.01 ms** | **5,418× Pebble** |
+| `Reader.Count(Pattern{Label: "source:cmt-pipeline"})` | 0.02 ms | 0.03 ms | 0.01 ms | 0.01 ms | 3× (empty) |
+| `Reader.Count(Pattern{Label: "derived:counsel-graph"})` | 0.02 ms | 0.02 ms | 0.01 ms | 0.01 ms | 3× (empty) |
+| `Reader.Count(Pattern{Label: "derived:cluster"})` | 2.10 ms | 2.19 ms | **0.01 ms** | **0.01 ms** | **350× Pebble** |
+
+Pebble now wins every measured access pattern. The previously-mixed result is gone. The `source:sec-letter` Count dropped from 180 ms (broken Pebble) → 0.01 ms (counter-driven Pebble) — an 18,000× improvement against the prior broken Pebble baseline, and 5,418× against the SQLite covering-index baseline. Raw archive: [`secdek-bench-with-labelcount-merger-2026-05-06.log`](./bench-output/secdek-bench-with-labelcount-merger-2026-05-06.log).
+
+### Why migration takes the time it does
+
+The migration phase ran 16.15M quads in 15m26s (no-merger baseline) / 17m1.9s (with merger active), or 15-17K quads/sec sustained. That's slower than the 20K quads/sec the 2026-05-05 round-trip showed — the difference is mostly per-Commit Merge overhead in the new path (~9%) plus pebble compaction catching up at higher data sizes.
+
+Three layers of structural cost explain the absolute number, in priority order:
+
+1. **LSM write amplification.** Pebble is a log-structured merge tree: every key write lands first in an in-memory memtable, gets flushed to an L0 sstable, and is eventually compacted down through L1, L2, ... merging into bigger sorted files. A single logical key write becomes O(log N) physical writes across levels over time. This is fundamental to LSM trees and documented in Pebble's [README](https://github.com/cockroachdb/pebble/blob/master/README.md) and the broader literature (RocksDB, LevelDB, BigTable). Steady-state writes settle at a sustained rate that's compaction-bound, not write-bound.
+2. **Compactor catching up.** During a bulk load the compactor competes for I/O and CPU with incoming writes. Per the bench: ~34K quads/sec early in the run, ~17K sustained — the compactor catching up is the slope you see in the per-100k progress lines.
+3. **We're using the normal write path, not Pebble's bulk-ingest fast path.** Pebble exposes `db.Ingest([]string)` for handing pre-sorted external sstables directly to the engine; CockroachDB's bulk-restore uses it and runs 5-10× faster than the regular write path. quadstore's `BulkLoader` does plain `wb.Set` per quad — correct but suboptimal for pure-migration workloads. **This is the next optimization on the roadmap (`BulkLoader.IngestSorted` / `IngestSortedExternal`); see TODO.md.**
+
+For SecDek's actual cutover this is fine — 17 min in a maintenance window is bounded and predictable, scales linearly with corpus size. For SlideDek-class workloads (133M+ quads) the IngestSorted path becomes load-bearing.
 
 ### What we're going to measure
 

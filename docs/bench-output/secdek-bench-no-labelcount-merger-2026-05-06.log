@@ -1,0 +1,16 @@
+2026/05/06 10:19:55.719737 ==> opening partitioned SQLite: /home/ubuntu/work/secdek-2026-05-06.db
+2026/05/06 10:19:55.720796 ==> opening Pebble: /home/ubuntu/work/pebble-out
+2026/05/06 10:19:55.760675 ==> sampling subject pool
+2026/05/06 10:20:42.477857     pool: 200 letter:* / 0 cmt:* subjects
+2026/05/06 10:20:46.586013 ==> results (warmup=2 hot=10, lower is better)
+
+pattern                          sqlite p50   sqlite p99   pebble p50   pebble p99   speedup   
+--------------------------------------------------------------------------------------------------
+subject-letter                       17.66 ms     17.83 ms      3.81 ms      3.86 ms     4.64x
+label:source:sec-letter              38.05 ms     38.22 ms    179.98 ms    209.58 ms     0.21x
+label:source:cmt-pipeline             0.02 ms      0.03 ms      0.00 ms      0.01 ms     5.50x
+label:derived:counsel-graph           0.02 ms      0.02 ms      0.01 ms      0.01 ms     2.75x
+label:derived:cluster                 2.13 ms      2.19 ms      8.61 ms      9.21 ms     0.25x
+
+speedup = sqlite_p50 / pebble_p50; values > 1 mean Pebble is faster.
+2026/05/06 10:20:46.586345 ==> JSON written to /home/ubuntu/work/bench.json

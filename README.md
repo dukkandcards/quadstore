@@ -70,6 +70,19 @@ The questions that used to leak into every project answer themselves now:
 
 The database refuses to accept rows that don't carry their own provenance, and that single rule makes the rest fall out for free.
 
+## What it does, in a sentence
+
+**quadstore observes.** It records what was written, by whom, where it came from, and when — and it refuses to accept anything that doesn't carry its own answer to those questions. It does not compute, rank, classify, judge, or recommend. The application built on top does whatever it does with the data; quadstore is the patient custodian underneath, the one that lets you ask "where did this come from" and "who wrote this row" months later and get a straight answer because it kept watching while everything else moved on.
+
+This stance shows up everywhere in the surface:
+
+- **The label namespace is enforced at write time**, not validated at read. The library refuses bad provenance up front instead of letting you sort it out later.
+- **The `commits` + `commit_ops` audit trail is a write-time invariant**, not a separate observability tool. Every Commit records who, what source, what reason, what time, with a UUIDv7 commit ID — at the same transaction boundary as the data.
+- **No query language. No graph algorithms.** quadstore surfaces what's there. PageRank, shortest-path, community detection, scoring, ranking — all live downstream of this layer, in the application's code. Mixing computed judgment into the storage layer is how provenance dies.
+- **`derived:*` is regenerable from `source:*` as a unit.** The library doesn't pretend to know which derivations are correct; it lets the application drop the lot and rebuild whenever the rules change.
+
+If that posture matches yours — *observe carefully, expose patterns, don't editorialize* — the rest of the docs will feel familiar. If you want a database that scores its rows for you, this isn't the right tool.
+
 ## Is this for you
 
 If your graph fits on one machine, your writes go through Go code you control, and you would rather ship a binary than run a server — this is the kind of tool I would hand you.

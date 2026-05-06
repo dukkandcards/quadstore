@@ -42,13 +42,14 @@ import (
 // data values is required to avoid label/predicate/object collisions
 // (SPO subject="abc" must not collide with subject="ab" predicate="c").
 const (
-	prefSPO byte = 'q' // SPO: subject  | predicate | object   | label
-	prefPOS byte = 'p' // POS: predicate | object   | subject | label
-	prefOSP byte = 'o' // OSP: object   | subject  | predicate | label
-	prefLSP byte = 'l' // LSP: label    | subject  | predicate | object
-	prefC   byte = 'c' // commits:    'c' | commitID
-	prefCO  byte = 'C' // commit_ops: 'C' | commitID | seq | op
-	sep     byte = 0x00
+	prefSPO        byte = 'q' // SPO:        subject   | predicate | object   | label
+	prefPOS        byte = 'p' // POS:        predicate | object    | subject  | label
+	prefOSP        byte = 'o' // OSP:        object    | subject   | predicate | label
+	prefLSP        byte = 'l' // LSP:        label     | subject   | predicate | object
+	prefLabelCount byte = 'L' // label-cnt:  'L' | label  → 8-byte LE int64 count
+	prefC          byte = 'c' // commits:    'c' | commitID
+	prefCO         byte = 'C' // commit_ops: 'C' | commitID | seq | op
+	sep            byte = 0x00
 )
 
 // validLabelPrefixes mirrors writer.go to keep namespace
@@ -110,11 +111,13 @@ func (quietLogger) Fatalf(format string, args ...interface{}) {
 	panic(fmt.Sprintf(format, args...))
 }
 
-// Open opens or creates a Pebble store at path. Defaults are
-// out-of-the-box Pebble options other than a quiet logger.
+// Open opens or creates a Pebble store at path. Registers the
+// label-count Merger so that the 'L' keyspace can carry running per-label
+// totals updated incrementally on every Commit / BulkLoader flush.
 func Open(path string) (*Store, error) {
 	db, err := pebble.Open(path, &pebble.Options{
 		Logger: quietLogger{},
+		Merger: labelCountMerger,
 	})
 	if err != nil {
 		return nil, err
@@ -335,6 +338,16 @@ func (w *Writer) Commit(_ context.Context, b Batch) error {
 		}
 	}
 
+	// Per-label counter updates: aggregate Adds and Removes per
+	// effective label, then issue one Merge per non-zero delta. Pebble
+	// accumulates fragments associatively; concurrent Writers do not
+	// race here.
+	if deltas := aggregateLabelDeltas(b.Adds, b.Removes, b.Label); len(deltas) > 0 {
+		if err := applyLabelDeltas(wb, deltas); err != nil {
+			return err
+		}
+	}
+
 	// NoSync mirrors SQLite synchronous=NORMAL: WAL appended, not
 	// fsynced per Commit. CommitSync is the strict-durability variant.
 	return wb.Commit(pebble.NoSync)
@@ -520,10 +533,18 @@ func (r *Reader) Find(_ context.Context, p Pattern) iter.Seq2[Quad, error] {
 	}
 }
 
-// Count returns the number of quads matching the pattern. Implemented
-// as iter-and-count; production port could optimize via Pebble's
-// per-sstable row counts but at our scale it's not the bottleneck.
+// Count returns the number of quads matching the pattern.
+//
+// Fast paths:
+//   - Pattern{Label: X} with all other fields empty: O(1) Get on the
+//     'L' (label-count) keyspace. Maintained by Writer.Commit /
+//     BulkLoader; reset by Store.RebuildLabelCounters() on demand.
+//
+// Slow path: iter-and-count via Reader.Find for any other pattern shape.
 func (r *Reader) Count(ctx context.Context, p Pattern) (int64, error) {
+	if p.Label != "" && p.Subject == "" && p.Predicate == "" && p.Object == "" {
+		return r.store.readLabelCount(p.Label)
+	}
 	var n int64
 	for _, err := range r.Find(ctx, p) {
 		if err != nil {
@@ -550,14 +571,19 @@ type BulkStats struct {
 
 // BulkLoader is a write-optimized bulk-ingestion path. Buffers
 // quads, flushes WriteBatches at NoSync, fsyncs at Close.
+//
+// labelDeltas accumulates per-label add counts within the current
+// flush window; flushed as Merge operations into the batch when flush()
+// runs. Per-flush rather than per-Add to amortize the Merge cost.
 type BulkLoader struct {
-	store     *Store
-	batchSize int
-	wb        *pebble.Batch
-	bufRows   int
-	label     string
-	stats     BulkStats
-	closed    bool
+	store       *Store
+	batchSize   int
+	wb          *pebble.Batch
+	bufRows     int
+	label       string
+	stats       BulkStats
+	labelDeltas map[string]int64
+	closed      bool
 }
 
 // BulkLoader opens a BulkLoader. defaultLabel becomes the label
@@ -570,10 +596,11 @@ func (s *Store) BulkLoader(_ context.Context, defaultLabel string) (*BulkLoader,
 		}
 	}
 	return &BulkLoader{
-		store:     s,
-		batchSize: 500,
-		label:     defaultLabel,
-		wb:        s.db.NewBatch(),
+		store:       s,
+		batchSize:   500,
+		label:       defaultLabel,
+		wb:          s.db.NewBatch(),
+		labelDeltas: make(map[string]int64, 4),
 	}, nil
 }
 
@@ -602,6 +629,7 @@ func (b *BulkLoader) Add(q Quad) error {
 			return err
 		}
 	}
+	b.labelDeltas[label]++
 	b.stats.Added++
 	b.stats.Attempted++
 	b.bufRows++
@@ -617,6 +645,15 @@ func (b *BulkLoader) Flush() error { return b.flush() }
 func (b *BulkLoader) flush() error {
 	if b.bufRows == 0 {
 		return nil
+	}
+	// Apply accumulated per-label deltas as Merge operations on the
+	// pending batch before commit. Single Merge per distinct label per
+	// flush, regardless of how many Add() calls landed in this flush.
+	if err := applyLabelDeltas(b.wb, b.labelDeltas); err != nil {
+		return err
+	}
+	for k := range b.labelDeltas {
+		delete(b.labelDeltas, k)
 	}
 	if err := b.wb.Commit(pebble.NoSync); err != nil {
 		return err
