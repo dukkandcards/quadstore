@@ -28,7 +28,7 @@ and restores the originals on `Close`.
 - **Database size:** 28 GB SQLite file with the full SEC + CFTC corpus.
 - **Steady-state ingest:** ~10K quads/sec sustained during partition migration, write-only workload, batches of 500 rows × 4 SQL parameters per BulkLoader transaction.
 - **Point lookups:** sub-millisecond on indexed predicates; tested at 25K read ops/sec sustained across the EBS gp3 volume during corpus scan.
-- **Cold start:** the SecDek server's two warmup indices (gridCorpusIndex + cmt review-window) build in ~91 seconds against the 28 GB DB. This is application-level pre-aggregation, not quadstore overhead.
+- **Cold start:** the application's two warmup indices on top of this 28 GB DB build in ~91 seconds at process start. This is application-level pre-aggregation, not quadstore overhead.
 
 ## Practical guidance
 

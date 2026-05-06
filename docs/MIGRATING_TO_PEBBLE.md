@@ -156,13 +156,15 @@ A few principles from the SecDek planning that generalize:
 
 When the consolidation run completes, this section will be filled in:
 
-- **Total Pebble dir size** vs current `main.db` + `corpus.db` combined.
+- **Total Pebble dir size** vs the two SQLite partition files combined.
 - **Full-scan `Count`** time vs the same on partitioned SQLite.
-- **`letter:*` subject point lookups** (the dominant query shape on `/grid/letter:*`) — 200 random samples, p50 / p99 latency vs partitioned SQLite.
-- **`cmt:*` subject point lookups** (the dominant query shape on the comment-letter pages) — same shape.
+- **Subject point lookups against the primary namespace** (the dominant hot-page shape) — 200 random samples, p50 / p99 latency vs partitioned SQLite.
+- **Subject point lookups against the secondary namespace** — same shape.
 - **Cross-partition fan-out reads** that today touch both partitions in SQLite — what does single-Pebble look like for those?
-- **A representative read benchmark** of the actual hot-page query mix (`gridCorpusIndex` build, `byFirmDomain` aggregation, `partners` career-timeline rollup).
+- **Label-scoped reads** across the application's main label namespaces (workload primitives that the higher-level aggregations are built on top of).
 - **Migration time** for the consolidation pass itself.
+
+We're deliberately measuring workload primitives (subject lookups, label-scoped reads, full iteration) rather than the application's specific aggregation builders. If Pebble wins the primitives, the application-level pages follow; testing primitives is also more reproducible for any other quadstore consumer who reads this case study and wants to apply the same framework.
 
 The thesis succeeds if Pebble single-dir is competitive (≥ as fast on the hot reads at acceptable size). It fails if the partition split was actually doing real work that Pebble's natural sstable segmentation can't replicate at this corpus shape.
 

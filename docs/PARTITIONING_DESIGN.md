@@ -11,12 +11,13 @@ surface.
 ## Why
 
 The single `quads` table hits a B-tree dilution wall when a Store accumulates
-fact families that don't share queries. Concrete trigger: SecDek's live DB
-grew from 1.3 GB → 28 GB across April–May 2026 after a comment-letter corpus
-load added ~12 M `source:cmt-*` and `derived:cmt-*` quads. The product code
-that operates on the ~256 K `source:sec-letter` rows now scans a B-tree where
-~47× of the leaves are unrelated — every full-predicate scan pays the
-dilution tax even when the consumer never reads the corpus rows.
+fact families that don't share queries. Concrete trigger from a production
+consumer: a live DB grew from 1.3 GB → 28 GB across April–May 2026 after a
+secondary corpus load added ~12 M new quads under a different label namespace.
+Product code that operated on the ~256 K rows of the primary fact family
+suddenly scanned a B-tree where ~47× of the leaves were unrelated — every
+full-predicate scan paid the dilution tax even when the consumer never read
+the corpus rows.
 
 Per `TODO.md`:
 
@@ -285,20 +286,23 @@ partition-migrate \
 
 ```json
 {
-  "default": "main",
+  "default": "primary",
   "partitions": [
-    { "name": "main",   "file": "main.db" },
-    { "name": "corpus", "file": "corpus.db" }
+    { "name": "primary",   "file": "primary.db" },
+    { "name": "secondary", "file": "secondary.db" }
   ],
   "routing": [
-    { "label_prefix": "source:cmt-",            "partition": "corpus" },
-    { "label_prefix": "source:sec-comment-letter", "partition": "corpus" },
-    { "label_prefix": "derived:cmt-",           "partition": "corpus" },
-    { "label_prefix": "derived:body-",          "partition": "corpus" },
-    { "label_prefix": "derived:paragraph-reuse","partition": "corpus" }
+    { "label_prefix": "source:secondary-feed-a", "partition": "secondary" },
+    { "label_prefix": "source:secondary-feed-b", "partition": "secondary" },
+    { "label_prefix": "derived:secondary-",      "partition": "secondary" }
   ]
 }
 ```
+
+(The example uses generic placeholder label prefixes. Real
+consumers will use whatever label namespace their own ingest
+pipeline produces — the routing config maps prefixes to partitions
+without the library knowing or caring what the labels mean.)
 
 Routes resolve longest-prefix-match. Anything that does not match falls to
 `default`.
@@ -410,8 +414,7 @@ rollback plan are out-of-tree.
    from subject prefixes; the consumer encodes its routing knowledge in
    `RoutePattern`. This keeps the rigor (no library-side guessing) and
    buys the optimization (subject-prefix scoping when the consumer has
-   that knowledge — which SecDek does, since `cmt:` subjects live only
-   in corpus and `letter:` subjects live in main).
+   that knowledge in their own application code).
 4. **Cross-partition Vacuum/Prune: per-partition variants AND sequential
    defaults.** Each partition is an independent unit (rigorous), so
    `Store.VacuumFor(p)` and `Writer.PruneOpsFor(p, t)` exist. The
