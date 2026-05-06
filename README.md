@@ -90,7 +90,7 @@ If you need a query language an analyst can run, sharding across machines, or bu
 
 ## The other things that mattered
 
-**Pebble-backed by default.** quadstore runs on [Pebble](https://github.com/cockroachdb/pebble), CockroachDB's pure-Go LSM storage engine. On cloud disks (gp3 EBS), single-quad audited Commit is **40× faster** than the SQLite-backed alternative; bulk loads at 100k rows are **5.5× faster**; on-disk size is **≈10× smaller** (28 GB SecDek production snapshot → ~3 GB after Pebble's default zstd block compression). Validated end-to-end on a 19M-quad production graph round-tripped byte-perfectly between backends. Numbers and methodology in [`docs/PEBBLE_VS_SQLITE.md`](docs/PEBBLE_VS_SQLITE.md).
+**Pebble-backed by default.** quadstore runs on [Pebble](https://github.com/cockroachdb/pebble), CockroachDB's pure-Go LSM storage engine. The Pebble work was driven by the largest internal user — a 60K+ PPTX deck corpus with **133M quads / 60 GB** on SQLite where the index rebuild on bulk-load `Close` was running for tens of minutes. On cloud disks (gp3 EBS), single-quad audited Commit is **40× faster** than the SQLite-backed alternative; bulk loads at 100k rows are **5.5× faster**; on-disk size is **≈10× smaller** (28 GB SecDek production snapshot → ~3 GB after Pebble's default zstd block compression). Validated end-to-end on a 19M-quad production graph round-tripped byte-perfectly between backends. Numbers and methodology in [`docs/PEBBLE_VS_SQLITE.md`](docs/PEBBLE_VS_SQLITE.md).
 
 **Pure Go.** Both backends. No CGo, no `libsqlite3`, no `librocksdb`. `go build` is enough. Cross-compiles to `linux/arm64` from `darwin/arm64` with no setup. Lambda and distroless containers work without ceremony. Most embedded-graph stories have a CGo footnote that breaks somebody's day; this one doesn't.
 
@@ -122,14 +122,31 @@ parity gaps remain on `*PebbleStore` — the legacy `*Iterator`
 (`From`/`Out`/`In`/`Has`/`Unique`) — which will be added when
 a concrete user requests them.
 
-The SQLite-backed `Open(path)` is production-tested on
-[SecDek](https://sfy.io) at 28 GB / ~10K quads/sec sustained
-ingest / sub-millisecond indexed lookups; that deployment is
-not yet migrated to Pebble. Both backends are supported
-indefinitely. Whether `Open()` flips its default backend at
-`v1.0.0` is an open question — the API is stabilizing and
-[`CHANGELOG`](./CHANGELOG.md) calls breaking changes out
-explicitly.
+**Production users today**, all under
+[dukkandcards](https://github.com/dukkandcards):
+
+- **[SlideDek](https://slidedek.com)** — PPTX analysis +
+  portrait rendering. Largest store at **133M quads / ~60 GB /
+  60K+ decks / ~140 distinct predicates**. Pebble backend. This
+  workload is what drove the v0.2 Pebble work in the first
+  place — the SQLite path's index-rebuild-on-`Close` was running
+  for tens of minutes on a 60+ GB table, and that pain is what
+  the LSM swap was answering.
+- **[SecDek](https://sfy.io)** — corporate-intel SaaS over SEC
+  no-action letters. 19M quads / 28 GB on the SQLite backend,
+  ~10K quads/sec sustained ingest, sub-millisecond indexed
+  lookups. The same 19M-quad snapshot was the byte-perfect
+  round-trip that validated `MigrateToPebble` at production
+  scale.
+- **LawDek**, **IGdek**, **mega-index**, **PubDek** — smaller
+  dek products that also import quadstore (matter/event,
+  card-metadata, book-indexing, and book-corpus workloads
+  respectively).
+
+Both backends are supported indefinitely. Whether `Open()`
+flips its default backend at `v1.0.0` is an open question —
+the API is stabilizing and [`CHANGELOG`](./CHANGELOG.md) calls
+breaking changes out explicitly.
 
 If you ship something on quadstore, open a PR adding it here.
 

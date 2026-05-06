@@ -79,9 +79,10 @@ inserts in one in-process WriteBatch.
   SQLite's BulkLoader on 1k rows finishes in ~7 ms; Pebble in ~42 ms.
   The crossover sits between N=10k and N=100k.
 
-For the SecDek-class workload (single-machine, multi-million-row
-ingest, point-shaped reads) the wins all line up where they matter:
-fast single commits, fast subject lookups, fast large bulk loads.
+For the SlideDek/SecDek-class workload (single-machine,
+multi-million-row ingest, point-shaped reads) the wins all line up
+where they matter: fast single commits, fast subject lookups, fast
+large bulk loads.
 
 ## Linux confirms and amplifies
 

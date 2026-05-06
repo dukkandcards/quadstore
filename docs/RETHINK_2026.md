@@ -65,7 +65,7 @@ Empty values, zero-byte separators, prefix scans for the natural query shapes. A
 
 ### 2. Predicate dictionary from day one
 
-In production we observed **~140 distinct predicates across 133 M rows** (SecDek corpus). Storing predicate strings verbatim is paying ~20 bytes × 133 M = ~2.5 GB just to repeat the same ~140 strings.
+In production we observed **~140 distinct predicates across 133 M rows** (SlideDek corpus, the workload that drove the Pebble investigation). Storing predicate strings verbatim is paying ~20 bytes × 133 M = ~2.5 GB just to repeat the same ~140 strings.
 
 A `predicates(id INTEGER, value TEXT)` lookup table + `quads.predicate_id INTEGER` column would be a **10-20× compression on the predicate column alone**. The cost is one extra hashmap lookup at write, one extra join (or in-memory cache) at read.
 
