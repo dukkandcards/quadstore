@@ -162,6 +162,70 @@ func (s *PebbleStore) RebuildLabelCounters() error {
 	return s.inner.RebuildLabelCounters()
 }
 
+// IngestSortedExternalOptions controls IngestSortedExternal behavior.
+// Mirrors pebbleq.IngestSortedExternalOptions.
+type IngestSortedExternalOptions struct {
+	DefaultLabel string // applied to quads with empty Label
+	TmpDir       string // working dir for run files + final sstables
+	ChunkSize    int    // quads per in-memory sort chunk; default 500_000
+}
+
+// IngestSortedExternalStats reports what IngestSortedExternal did.
+type IngestSortedExternalStats struct {
+	QuadsIngested     int64
+	DuplicatesSkipped int64
+	SSTablesWritten   int
+	BytesWritten      int64
+	RunsCreated       int
+	Duration          time.Duration
+}
+
+// IngestSortedExternal is the bounded-memory bulk-ingest path. Reads
+// quads from a channel, builds sorted runs on disk in chunks, k-way-
+// merges the runs into per-keyspace sstables, and hands them to
+// db.Ingest. Working set: ~400 bytes/quad × ChunkSize (default 500k)
+// regardless of total corpus size.
+//
+// Use this when the corpus exceeds available RAM. For corpora that
+// fit, the in-memory IngestSorted variant is faster (no run file
+// write/read overhead).
+//
+// Caller is responsible for closing the input channel when input is
+// drained. Library handles back-pressure: it pulls from the channel
+// at chunk-flush rate (one chunk = one disk write per keyspace).
+func (s *PebbleStore) IngestSortedExternal(ctx context.Context, in <-chan Quad, opts IngestSortedExternalOptions) (IngestSortedExternalStats, error) {
+	innerCh := make(chan pebbleq.Quad, cap(in))
+	go func() {
+		defer close(innerCh)
+		for q := range in {
+			select {
+			case <-ctx.Done():
+				return
+			case innerCh <- pebbleq.Quad{
+				Subject:   q.Subject,
+				Predicate: q.Predicate,
+				Object:    q.Object,
+				Label:     q.Label,
+			}:
+			}
+		}
+	}()
+	innerOpts := pebbleq.IngestSortedExternalOptions{
+		DefaultLabel: opts.DefaultLabel,
+		TmpDir:       opts.TmpDir,
+		ChunkSize:    opts.ChunkSize,
+	}
+	st, err := s.inner.IngestSortedExternal(ctx, innerCh, innerOpts)
+	return IngestSortedExternalStats{
+		QuadsIngested:     st.QuadsIngested,
+		DuplicatesSkipped: st.DuplicatesSkipped,
+		SSTablesWritten:   st.SSTablesWritten,
+		BytesWritten:      st.BytesWritten,
+		RunsCreated:       st.RunsCreated,
+		Duration:          st.Duration,
+	}, err
+}
+
 // PebbleWriter is the Pebble-backed Writer. Same surface as *Writer
 // (Commit, Close); under the hood writes go through pebbleq.
 type PebbleWriter struct {
