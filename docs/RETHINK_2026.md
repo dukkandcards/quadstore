@@ -47,7 +47,7 @@ Empty values, zero-byte separators, prefix scans for the natural query shapes. A
 - 1k-quad batch commit: **2.1× faster on M1, 4.5× faster on Linux.**
 - 100k-quad bulk load: **2.5× faster on M1, 5.5× faster on Linux.** The "sstables are sorted on write, no rebuild step" advantage is a clean ~22% of total cost on the SQLite path.
 - Find by subject (~100 rows from 10k): **3× faster on M1.**
-- On-disk size: **≈10×** smaller at production scale — a 19,176,859-quad SecDek snapshot went from 28 GB SQLite → ~3 GB Pebble dir, default zstd block compression doing the work.
+- On-disk size: **≈10×** smaller — a 19,176,859-quad SecDek SQLite snapshot (real production data) round-tripped to ~3 GB Pebble dir, default zstd block compression doing the work.
 - Real-data round-trip: 19M-quad migration produced byte-identical subjects-hash and predicates-hash; 200 random subject point queries with zero mismatches.
 
 **The expected 10-20 µs single-commit target landed under it** — 5.95 µs on M1, 9.6 µs on Linux. The 4-6× improvement we forecast turned out to be 18-40×. The cloud-disk delta widening past the M1 numbers is the part we couldn't have predicted from a laptop.
@@ -65,7 +65,7 @@ Empty values, zero-byte separators, prefix scans for the natural query shapes. A
 
 ### 2. Predicate dictionary from day one
 
-In production we observed **~140 distinct predicates across 133 M rows** (SlideDek corpus, the workload that drove the Pebble investigation). Storing predicate strings verbatim is paying ~20 bytes × 133 M = ~2.5 GB just to repeat the same ~140 strings.
+During the SlideDek port-benchmark we observed **~140 distinct predicates across 133 M rows** — the workload that drove the Pebble investigation, exercised against quadstore's SQLite path during the ArangoDB → quadstore port effort. Storing predicate strings verbatim was paying ~20 bytes × 133 M = ~2.5 GB just to repeat the same ~140 strings.
 
 A `predicates(id INTEGER, value TEXT)` lookup table + `quads.predicate_id INTEGER` column would be a **10-20× compression on the predicate column alone**. The cost is one extra hashmap lookup at write, one extra join (or in-memory cache) at read.
 

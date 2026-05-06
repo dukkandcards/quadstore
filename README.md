@@ -122,26 +122,25 @@ parity gaps remain on `*PebbleStore` — the legacy `*Iterator`
 (`From`/`Out`/`In`/`Has`/`Unique`) — which will be added when
 a concrete user requests them.
 
-**Production users today**, all under
-[dukkandcards](https://github.com/dukkandcards):
+**Why this exists.** quadstore came out of moving off
+ArangoDB after its 3.12 BSL / Community License change made
+it unworkable for our projects. The first big port target was
+a 60K+ PPTX-analysis product whose corpus, exercised against
+quadstore's SQLite path, hit ~4-hour bulk loads where the
+index rebuild on `Close` dominated for tens of minutes on a
+60+ GB / 133M-quad table. That's the pain the Pebble work in
+v0.2 was answering.
 
-- **[SlideDek](https://slidedek.com)** — PPTX analysis +
-  portrait rendering. Largest store at **133M quads / ~60 GB /
-  60K+ decks / ~140 distinct predicates**. Pebble backend. This
-  workload is what drove the v0.2 Pebble work in the first
-  place — the SQLite path's index-rebuild-on-`Close` was running
-  for tens of minutes on a 60+ GB table, and that pain is what
-  the LSM swap was answering.
-- **[SecDek](https://sfy.io)** — corporate-intel SaaS over SEC
-  no-action letters. 19M quads / 28 GB on the SQLite backend,
-  ~10K quads/sec sustained ingest, sub-millisecond indexed
-  lookups. The same 19M-quad snapshot was the byte-perfect
-  round-trip that validated `MigrateToPebble` at production
-  scale.
-- **LawDek**, **IGdek**, **mega-index**, **PubDek** — smaller
-  dek products that also import quadstore (matter/event,
-  card-metadata, book-indexing, and book-corpus workloads
-  respectively).
+**Production users today.**
+[**SecDek**](https://sfy.io) — corporate-intel SaaS over SEC
+no-action letters — runs quadstore on the SQLite backend at
+**19M quads / 28 GB** with ~10K quads/sec sustained ingest and
+sub-millisecond indexed lookups. The same 19M-quad snapshot was
+the byte-perfect round-trip that validated `MigrateToPebble`
+end-to-end on real production data — but no consumer has
+flipped to Pebble in production yet. Other internal dek
+products (SlideDek and the rest of the family) are mid-port
+from ArangoDB; this README will list them once they're live.
 
 Both backends are supported indefinitely. Whether `Open()`
 flips its default backend at `v1.0.0` is an open question —
