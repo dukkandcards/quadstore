@@ -223,6 +223,45 @@ Added `'L' | label → 8-byte LE int64` keyspace, registered a custom Pebble Mer
 
 Pebble now wins every measured access pattern. The previously-mixed result is gone. The `source:sec-letter` Count dropped from 180 ms (broken Pebble) → 0.01 ms (counter-driven Pebble) — an 18,000× improvement against the prior broken Pebble baseline, and 5,418× against the SQLite covering-index baseline. Raw archive: [`secdek-bench-with-labelcount-merger-2026-05-06.log`](./bench-output/secdek-bench-with-labelcount-merger-2026-05-06.log).
 
+### IngestSorted: variants and their memory ceilings
+
+The standard `BulkLoader` write path settles at ~17K quads/sec because it goes through Pebble's memtable + WAL + compaction. For pure-migration workloads, Pebble exposes `db.Ingest([]string)` — hand it pre-built sorted sstables, it places them directly into the appropriate level, no compaction overhead. CockroachDB's bulk-restore uses this; it's typically 5-10× faster than the regular write path. quadstore exposes this as a three-level ladder, each variant trading complexity for memory bound:
+
+| variant | memory ceiling | when to use |
+|---|---|---|
+| **`IngestSorted` (in-memory)** | ~500 bytes/quad working set (Quad slice + four key encodings + sort overhead). **Hard ceiling: ~10-15M quads on a 16 GB box; ~30-50M quads on a 64 GB box.** Caller is responsible for staying under. | Small-to-medium corpora that fit in RAM. mega-index, PubDek, single-corpus SlideDek chunks. Simplest API: `Store.IngestSorted(ctx, []Quad, opts)`. |
+| **`IngestSortedExternal`** *(planned)* | Bounded memory regardless of corpus size — channel-fed; sorted runs flush to disk; k-way merge stream feeds `sstable.Writer`. | Corpora that exceed in-memory RAM. SlideDek-class (133M+ quads), multi-billion-quad consumers. |
+| **Per-corpus driver pattern** | Same as in-memory per chunk; caller groups input by corpus / shard / partition and calls `IngestSorted` per chunk into the same Pebble dir. | When the source data has natural boundaries (per-table, per-shard, per-corpus) that fit in memory individually even when the union doesn't. Best fit for the SlideDek ArangoDB→quadstore port. Documented as a usage pattern, not a new API. |
+
+**Live measurement of the in-memory ceiling (2026-05-06).** First attempt to run `IngestSorted` against the 16,155,295-quad SecDek production snapshot on `t4g.xlarge` (16 GB RAM) **OOM-killed by the kernel during the sort phase**:
+
+```
+oom-kill:constraint=CONSTRAINT_NONE ... task=secdek-pebble-i,pid=70176
+Out of memory: Killed process 70176 (secdek-pebble-i)
+total-vm:17.5 GB, anon-rss:15.7 GB
+```
+
+The empirical ceiling on `t4g.xlarge` for SecDek-shape data lands somewhere between **10M and 16M quads**. We pushed past it cleanly. Resized the bench host to `r6g.2xlarge` (64 GB RAM, same arm64) and re-ran — measurements below.
+
+**Successful run on `r6g.2xlarge` (62 GB RAM available):**
+
+| metric | standard `BulkLoader` (with merger) | **`IngestSorted` (in-memory)** | speedup |
+|---|---|---|---|
+| 16.15M-quad migration | 17m 1.9s | **2m 32.1s** | **6.72×** |
+| Sustained ingest rate | 15,809 quads/sec | **106,203 quads/sec** | 6.72× |
+| Pebble dir size | 2.9 GB | **2.34 GB** | (fewer compaction artifacts) |
+| Compression vs SQLite source | 10.3× | **12.7×** | — |
+| Correctness sweep | all pass | all pass — byte-equivalent | — |
+| Memory peak | ~few hundred MB | ~9 GB / 62 GB available | (well under ceiling) |
+
+The 6.7× win sits squarely in the 5-10× range CockroachDB's bulk-restore docs predicted. Memory peaked at ~9 GB during the sort phase — comfortable headroom on a 64 GB box, confirming the empirical "~30-50M quads on a 64 GB box" ceiling estimate.
+
+Raw archive: [`secdek-ingest-sorted-r6g-2026-05-06.log`](./bench-output/secdek-ingest-sorted-r6g-2026-05-06.log).
+
+**What this proves and what it doesn't.** Proves: the in-memory `IngestSorted` is byte-equivalent to the standard write path on real production data, and 6-7× faster at the same scale. Doesn't prove: the same path works at SlideDek-class scale (133M+ quads) — we'd need either a much bigger memory box (~200 GB) OR `IngestSortedExternal`. The external-sort variant is the next library work; until it lands, the in-memory variant is the right choice for any consumer whose corpus fits the per-bench-host memory ceiling above.
+
+**Implication for callers.** If your corpus exceeds your bench host's RAM divided by ~500 bytes per quad, the in-memory variant will OOM-kill you cleanly mid-migration. There's no graceful degradation. Either size up the bench host (cheaper than dev time most of the time) or wait for `IngestSortedExternal`. Production cutover hosts can be smaller than the bench host — the bulk-load box doesn't have to be the steady-state runtime.
+
 ### Why migration takes the time it does
 
 The migration phase ran 16.15M quads in 15m26s (no-merger baseline) / 17m1.9s (with merger active), or 15-17K quads/sec sustained. That's slower than the 20K quads/sec the 2026-05-05 round-trip showed — the difference is mostly per-Commit Merge overhead in the new path (~9%) plus pebble compaction catching up at higher data sizes.

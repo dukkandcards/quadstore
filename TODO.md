@@ -95,6 +95,77 @@ file is "what should I call?" not "what does the no-arg name
 resolve to?" — flipping the no-arg default is a v1.0-scope
 breaking change and we haven't pulled the trigger.
 
+### Naming collision: quadstorejs/quadstore (RDF/TypeScript)
+
+There's an unrelated project of the same name —
+[quadstorejs/quadstore](https://github.com/quadstorejs/quadstore),
+a TypeScript RDF triplestore with SPARQL via Comunica. Active and
+on GitHub for years. The two share a 4-tuple data shape and
+nothing else.
+
+**Different conceptual fourth field:**
+
+- **Their `quadstore`**: fourth field is an **RDF named graph
+  identifier** — federation primitive in the W3C/Semantic Web
+  sense. RDF/JS-shaped (NamedNode/BlankNode/Literal/DefaultGraph),
+  SPARQL-aware, blank-node scoped.
+- **Our `quadstore`**: fourth field is an **enforced namespace
+  label** — `source:*` / `derived:*` / `human:{tenant}/*` /
+  `meta:*`, rejected at write time. Discipline primitive for
+  provenance, multi-tenancy, and regenerable derivations.
+
+**Comparison table for the eventual disambiguation note:**
+
+| dimension | dukkandcards/quadstore (this repo) | quadstorejs/quadstore |
+|---|---|---|
+| Language | Go (embedded library) | TypeScript/JavaScript (Node, Deno, Bun, browsers) |
+| Storage | SQLite → Pebble (LSM) | Any AbstractLevel: LevelDB, memory, IndexedDB |
+| Data model | Plain strings (subject/predicate/object/label) | Full RDF (NamedNode, BlankNode, Literal, DefaultGraph) |
+| Query language | None — Go pattern functions | SPARQL via quadstore-comunica |
+| RDF/JS interop | No | First-class — implements Sink/Source/Store |
+| Schema enforcement | Label namespace required | Optional, RDF-shaped |
+| Multi-tenancy | Built into label model | Manual |
+| Provenance | Built into commits table | Manual |
+| Idempotent writes | Yes | Manual |
+| License | MIT | MIT |
+
+**Who picks which.** If someone wants to ingest Turtle, run
+SPARQL, talk to other RDF tools, federate over named graphs —
+quadstorejs. If someone wants embedded Go storage with audit and
+tenancy by construction and no query language to learn — this
+repo. Almost no overlap in target user.
+
+**Why this is in TODO, not action:**
+
+Go's import-path-scoped namespace makes
+`github.com/dukkandcards/quadstore` technically unambiguous —
+no module collision. The cost is SEO + first-impression overlap:
+most developers who Google "quadstore" today land on quadstorejs
+first.
+
+**Three options (no decision yet):**
+
+1. **Live with it.** Go's namespace scoping is enough;
+   positioning copy in README disambiguates implicitly. Lowest
+   cost, viable as long as project traction stays modest.
+2. **Add a disambiguation one-liner** near the top of README,
+   e.g. *"Not to be confused with
+   [quadstorejs/quadstore](https://github.com/quadstorejs/quadstore),
+   an unrelated TypeScript RDF triplestore."* Cheap to add,
+   prevents wasted clicks for anyone arriving from search. Could
+   be done unilaterally; the question is whether it adds noise
+   or clarity to the opening paragraphs.
+3. **Rename eventually.** If the project gets enough traction
+   that the SEO collision becomes a real liability. Not yet.
+   Names that are still available + Go-import-friendly + capture
+   the discipline-primitive identity: TBD if we get there.
+
+**Trigger:** revisit this section when (a) someone files an issue
+asking "is this related to quadstorejs?", (b) a search-traffic
+metric appears showing meaningful confusion, or (c) we're
+considering a v1.0 announcement push (in which case option 2 or
+3 becomes worth doing pre-announcement).
+
 ## Current State (2026-04-13, end of day)
 
 Page clustering works. The HTML review tool is functional. Michelle

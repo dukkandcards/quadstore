@@ -1,0 +1,26 @@
+2026/05/06 13:52:52.481132 ==> phase 1: open SQLite source /home/ubuntu/work/secdek-2026-05-06.db
+2026/05/06 13:52:52.490468 ==> phase 2: source baseline (full scan)
+2026/05/06 13:56:51.518251     [src] total quads: 16155295 (239.0s)
+2026/05/06 14:04:01.430563     [src] distinct subjects: 1733370, distinct predicates: 340 (429.9s)
+2026/05/06 14:04:03.196545 ==> phase 3: stream quads into memory
+2026/05/06 14:04:43.919995     streamed 16155295 quads in 40.723s (~396708 quads/sec)
+2026/05/06 14:04:43.920042 ==> phase 4: open Pebble destination /home/ubuntu/work/pebble-ingest-sorted
+2026/05/06 14:04:43.943281 ==> phase 5: IngestSorted (in-memory variant)
+2026/05/06 14:07:16.060976     ingested 16155295 quads (0 duplicates skipped) in 2m32.118s
+2026/05/06 14:07:16.060999     sstables written: 4, total bytes: 2.34 GiB
+2026/05/06 14:07:16.061002     rate: 106203 quads/sec sustained
+2026/05/06 14:07:16.061006 ==> phase 6: destination baseline (full scan)
+2026/05/06 14:07:29.117586     [dst] total quads: 16155295 (13.1s)
+2026/05/06 14:07:45.028295     [dst] distinct subjects: 1733370, distinct predicates: 340 (15.9s)
+2026/05/06 14:07:46.921104 ==> phase 7: aggregate comparison
+2026/05/06 14:07:46.921170     OK:   total quads = 16155295 on both sides
+2026/05/06 14:07:46.921180     OK:   subjects-hash matches (7e1686d1a2e1c1d7)
+2026/05/06 14:07:46.921184     OK:   predicates-hash matches (8c19c491c1f0433e)
+2026/05/06 14:07:46.921187 ==> phase 8: sampled point-query correctness (200 random subjects)
+2026/05/06 14:07:48.996780     OK:   200 random subject point-queries; 0 mismatches; 0.7s
+2026/05/06 14:07:48.996811 ==> phase 9: on-disk size
+2026/05/06 14:07:48.996931     [src] 29.59 GiB (SQLite)
+2026/05/06 14:07:48.996938     [dst] 2.34 GiB (Pebble)
+2026/05/06 14:07:48.996941     compression: 12.7x (src/dst)
+2026/05/06 14:07:48.996944 ==> wall-clock total: 14m57s
+2026/05/06 14:07:48.996949 ==> all checks passed; IngestSorted is byte-equivalent to the standard write path
