@@ -16,26 +16,24 @@ for callers who want ~20 fewer transitive deps, smaller binaries, or
       is now O(1) on Pebble — measured 5,418× faster than the
       SQLite covering-index baseline. `Store.RebuildLabelCounters()`
       handles drift recovery. See `internal/pebbleq/labelcount.go`.
-- [ ] **`BulkLoader.IngestSorted` (Pebble bulk-ingest fast path).**
-      The big migration-time win. Three-level ladder per
-      `docs/MIGRATING_TO_PEBBLE.md` "Why migration takes the time
-      it does":
-      1. **In-memory sort** — sort all quads' four-key encodings
-         in RAM, write per-keyspace sorted sstables via
-         `pebble/sstable.Writer`, hand them to `db.Ingest`.
-         Right for ≤ ~10M-quad corpora on a 16 GB box.
-      2. **External merge sort** — channel-fed, write sorted
-         chunks to disk, k-way merge. Bounded memory at any
-         corpus size. Right for SlideDek-class workloads.
-      3. **Per-corpus driver pattern** — caller groups by
-         corpus, library treats each as a separate `IngestSorted`
-         call into the same Pebble dir. Documented as a usage
-         pattern, not a new API. Best fit for the SlideDek
-         ArangoDB → quadstore port shape.
-      Measured baseline to beat: 15-17K quads/sec on the standard
-      `BulkLoader` path; CockroachDB's IngestExternalFiles
-      experience says 5-10× faster. Targeting ~80-150K quads/sec
-      sustained.
+- [x] **IngestSorted (in-memory)** — shipped 2026-05-06.
+      `PebbleStore.IngestSorted([]Quad, opts)`. Validated on
+      SecDek 16.15M-quad snapshot: 2m 32s (6.7× faster than
+      standard BulkLoader). Memory ceiling at ~500 bytes/quad
+      working set; 16M corpus needs >16 GB RAM box.
+- [x] **IngestSortedExternal (bounded memory)** — shipped 2026-05-06.
+      `PebbleStore.IngestSortedExternal(<-chan Quad, opts)`.
+      Channel-fed, chunked sort + k-way merge. Validated on
+      SecDek 16.15M-quad snapshot at 3m 12.9s on t4g.xlarge
+      with ~1 GB peak memory — same hardware that OOM-killed
+      the in-memory variant. Working set is bounded by
+      `ChunkSize`, not corpus size.
+- [ ] **Per-corpus driver pattern (documentation)** — write up
+      the usage pattern where callers group input by corpus
+      boundary and call IngestSorted/Ext per chunk into the
+      same Pebble dir. Best fit for SlideDek's ArangoDB →
+      quadstore port (one corpus per AQL collection). Pure
+      documentation + an example, not a new API.
 - [ ] **`Match` parity on `*PebbleStore`.** Legacy `*Iterator` API
       (`Quad`/`Next`/`Err`/`Close`). `Reader.Find` with `iter.Seq2`
       is the modern path and works on both backends — `Match` is

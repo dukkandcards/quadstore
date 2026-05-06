@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.3-track — 2026-05-06 — IngestSorted ladder validated end-to-end
+
+### Added
+- **`PebbleStore.IngestSorted([]Quad, opts)`** — in-memory variant. Builds per-keyspace sorted sstables externally, hands to db.Ingest. ~6.7× faster than standard BulkLoader on the SecDek 16.15M-quad snapshot (2m 32s vs 17m 02s). Memory ceiling: ~500 bytes/quad × N; ceiling validated empirically by OOM at 16M quads on a 16 GB host, success at 16M on 64 GB.
+- **`PebbleStore.IngestSortedExternal(<-chan Quad, opts)`** — bounded-memory variant. Channel-fed; sorted runs flushed to disk; k-way merge into per-keyspace sstables. Working set ~400 bytes/quad × `ChunkSize` (default 500k) regardless of corpus size. Validated on SecDek 16.15M-quad snapshot at **3m 12.9s on t4g.xlarge / 16 GB** with **~1 GB peak memory** — same workload + same hardware that OOM-killed the in-memory variant.
+- `PebbleStore.RebuildLabelCounters()` — exposed at the public API for callers who need to reset label counters from LSP truth (e.g. after deduped IngestSorted).
+
+### Performance summary on the SecDek 16.15M-quad snapshot (full ladder)
+| variant | host | time | rate | memory peak |
+|---|---|---|---|---|
+| BulkLoader (with merger) | t4g.xlarge | 17m 1.9s | 15,809 q/s | ~few hundred MB |
+| IngestSorted in-memory | r6g.2xlarge / 62 GB | 2m 32.1s | 106,203 q/s | ~9 GB |
+| IngestSorted in-memory | t4g.xlarge / 16 GB | OOM-killed | — | 15.7 GB RSS at kill |
+| IngestSortedExternal | r6g.2xlarge / 62 GB | 3m 4.9s | 87,373 q/s | ~1 GB |
+| IngestSortedExternal | t4g.xlarge / 16 GB | 3m 12.9s | 83,757 q/s | ~1 GB |
+
+External-variant runs were 4% slower on the smaller box vs the bigger one — the algorithm is bound by `ChunkSize`, not by host RAM.
+
+### Documentation
+- `docs/MIGRATING_TO_PEBBLE.md`: full ladder section with measured numbers, bounded-memory empirical validation, and a "choosing between the two fast paths" decision aid.
+- Raw archives:
+  - `docs/bench-output/secdek-ingest-sorted-r6g-2026-05-06.log` (in-memory, r6g)
+  - `docs/bench-output/secdek-ingest-external-r6g-2026-05-06.log` (external, r6g)
+  - `docs/bench-output/secdek-ingest-external-t4g-2026-05-06.log` (external, t4g — bounded-memory validation)
+
+### Tests
+8 unit tests for IngestSortedExternal (round-trip, single chunk, empty input, cross-chunk dedup, label validation, ctx cancellation, run-file format, k-way merge) in addition to the prior 6 IngestSorted + 6 label-counter tests. All passing in 2.0s.
+
+### Compatibility
+The custom Pebble Merger (`quadstore.label-count.v1`) name is persisted in the manifest. v0.2 Pebble dirs (created with `pebble.DefaultMerger`) won't open with v0.3 code. Pre-existing dirs need recreating from source via `MigrateToPebble` or `IngestSorted`. v0.2 was opt-in; no production impact yet.
+
 ## v0.3-track — 2026-05-06 — Per-label counter (Pebble Merge)
 
 ### Added

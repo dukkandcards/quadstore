@@ -1,0 +1,57 @@
+2026/05/06 14:57:00.592449 ==> phase 1: open SQLite source /home/ubuntu/work/secdek-2026-05-06.db
+2026/05/06 14:57:00.602158 ==> phase 2: source baseline (Count + distinct subjects/predicates)
+2026/05/06 15:01:09.478944     [src] total quads: 16155295 (248.9s)
+2026/05/06 15:08:37.584405     [src] distinct subjects: 1733370, distinct predicates: 340 (448.1s)
+2026/05/06 15:08:39.383164 ==> phase 3: open Pebble destination /home/ubuntu/work/pebble-ingest-external
+2026/05/06 15:08:39.407122 ==> phase 4: IngestSortedExternal (chunk=500000, channel buffer=4096)
+2026/05/06 15:08:40.874643     [producer] streamed 500000 quads (1.5s elapsed)
+2026/05/06 15:08:44.949355     [producer] streamed 1000000 quads (5.5s elapsed)
+2026/05/06 15:08:48.959326     [producer] streamed 1500000 quads (9.6s elapsed)
+2026/05/06 15:08:53.196450     [producer] streamed 2000000 quads (13.8s elapsed)
+2026/05/06 15:08:56.959876     [producer] streamed 2500000 quads (17.6s elapsed)
+2026/05/06 15:09:00.729785     [producer] streamed 3000000 quads (21.3s elapsed)
+2026/05/06 15:09:04.632133     [producer] streamed 3500000 quads (25.2s elapsed)
+2026/05/06 15:09:08.555474     [producer] streamed 4000000 quads (29.1s elapsed)
+2026/05/06 15:09:12.056101     [producer] streamed 4500000 quads (32.6s elapsed)
+2026/05/06 15:09:15.706472     [producer] streamed 5000000 quads (36.3s elapsed)
+2026/05/06 15:09:19.093693     [producer] streamed 5500000 quads (39.7s elapsed)
+2026/05/06 15:09:22.835565     [producer] streamed 6000000 quads (43.4s elapsed)
+2026/05/06 15:09:26.337902     [producer] streamed 6500000 quads (46.9s elapsed)
+2026/05/06 15:09:29.969956     [producer] streamed 7000000 quads (50.6s elapsed)
+2026/05/06 15:09:35.125635     [producer] streamed 7500000 quads (55.7s elapsed)
+2026/05/06 15:09:38.667273     [producer] streamed 8000000 quads (59.3s elapsed)
+2026/05/06 15:09:42.168244     [producer] streamed 8500000 quads (62.8s elapsed)
+2026/05/06 15:09:45.643944     [producer] streamed 9000000 quads (66.2s elapsed)
+2026/05/06 15:09:49.154031     [producer] streamed 9500000 quads (69.7s elapsed)
+2026/05/06 15:09:52.563231     [producer] streamed 10000000 quads (73.2s elapsed)
+2026/05/06 15:09:55.986822     [producer] streamed 10500000 quads (76.6s elapsed)
+2026/05/06 15:09:59.558571     [producer] streamed 11000000 quads (80.2s elapsed)
+2026/05/06 15:10:03.125903     [producer] streamed 11500000 quads (83.7s elapsed)
+2026/05/06 15:10:06.569925     [producer] streamed 12000000 quads (87.2s elapsed)
+2026/05/06 15:10:09.932542     [producer] streamed 12500000 quads (90.5s elapsed)
+2026/05/06 15:10:13.406005     [producer] streamed 13000000 quads (94.0s elapsed)
+2026/05/06 15:10:16.900877     [producer] streamed 13500000 quads (97.5s elapsed)
+2026/05/06 15:10:20.290934     [producer] streamed 14000000 quads (100.9s elapsed)
+2026/05/06 15:10:23.605407     [producer] streamed 14500000 quads (104.2s elapsed)
+2026/05/06 15:10:27.135369     [producer] streamed 15000000 quads (107.7s elapsed)
+2026/05/06 15:10:30.575834     [producer] streamed 15500000 quads (111.2s elapsed)
+2026/05/06 15:10:34.014211     [producer] streamed 16000000 quads (114.6s elapsed)
+2026/05/06 15:10:36.894757     [producer] done; total streamed: 16155295
+2026/05/06 15:11:52.289625     ingested 16155295 quads (dropped 0 duplicates) in 3m12.882s
+2026/05/06 15:11:52.289657     sstables written: 4, runs created: 33, total bytes: 2.34 GiB
+2026/05/06 15:11:52.289661     sustained rate: 83757 quads/sec
+2026/05/06 15:11:52.289664 ==> phase 5: destination baseline
+2026/05/06 15:12:06.801485     [dst] total quads: 16155295 (14.5s)
+2026/05/06 15:12:24.742902     [dst] distinct subjects: 1733370, distinct predicates: 340 (17.9s)
+2026/05/06 15:12:26.632960 ==> phase 6: aggregate comparison
+2026/05/06 15:12:26.633006     OK:   total quads = 16155295 on both sides
+2026/05/06 15:12:26.633023     OK:   subjects-hash matches (7e1686d1a2e1c1d7)
+2026/05/06 15:12:26.633027     OK:   predicates-hash matches (8c19c491c1f0433e)
+2026/05/06 15:12:26.633030 ==> phase 7: sampled point-query correctness (200 random subjects)
+2026/05/06 15:12:28.908314     OK:   200 random subject point-queries; 0 mismatches; 0.7s
+2026/05/06 15:12:28.908344 ==> phase 8: on-disk size
+2026/05/06 15:12:28.908452     [src] 29.59 GiB (SQLite)
+2026/05/06 15:12:28.908457     [dst] 2.34 GiB (Pebble)
+2026/05/06 15:12:28.908458     compression: 12.7x
+2026/05/06 15:12:28.908461 ==> wall-clock total: 15m28s
+2026/05/06 15:12:28.908465 ==> all checks passed; IngestSortedExternal is byte-equivalent to the standard write path

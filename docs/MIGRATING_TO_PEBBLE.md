@@ -258,7 +258,51 @@ The 6.7× win sits squarely in the 5-10× range CockroachDB's bulk-restore docs 
 
 Raw archive: [`secdek-ingest-sorted-r6g-2026-05-06.log`](./bench-output/secdek-ingest-sorted-r6g-2026-05-06.log).
 
-**What this proves and what it doesn't.** Proves: the in-memory `IngestSorted` is byte-equivalent to the standard write path on real production data, and 6-7× faster at the same scale. Doesn't prove: the same path works at SlideDek-class scale (133M+ quads) — we'd need either a much bigger memory box (~200 GB) OR `IngestSortedExternal`. The external-sort variant is the next library work; until it lands, the in-memory variant is the right choice for any consumer whose corpus fits the per-bench-host memory ceiling above.
+**What this proves and what it doesn't.** Proves: the in-memory `IngestSorted` is byte-equivalent to the standard write path on real production data, and 6-7× faster at the same scale. Doesn't prove: the same path works at SlideDek-class scale (133M+ quads) — we'd need either a much bigger memory box (~200 GB) OR `IngestSortedExternal` (which now exists; results below).
+
+### IngestSortedExternal validation: bounded memory, same hardware
+
+`IngestSortedExternal` is the bounded-memory variant — channel-fed input, chunks sorted in memory, sorted runs flushed to disk, k-way merged into per-keyspace sstables and ingested. Working set: ~400 bytes/quad × `ChunkSize` regardless of total corpus size. The whole reason this path exists is to handle corpora that don't fit in RAM.
+
+**Test 1: same data, bigger host (sanity).** Run the SecDek 16.15M-quad snapshot through `IngestSortedExternal` on `r6g.2xlarge` (62 GB RAM, same as the in-memory IngestSorted run):
+
+- Migration time: **3m 4.9s** (87,373 quads/sec sustained)
+- Memory peak: **~1 GB / 62 GB available** (vs ~9 GB for the in-memory variant)
+- Runs created: 33 (16.15M / 500k chunk size = 32 + 1 partial)
+- Sstables written: 4 (one per keyspace)
+- All correctness checks pass; byte-equivalent to the in-memory + standard paths
+- Pebble dir: 2.34 GB (identical to in-memory)
+
+22% slower than in-memory IngestSorted (2m 32.1s), but uses 1/9th the memory.
+
+**Test 2: same data, the host that OOM-killed the in-memory variant.** Resized the bench to `t4g.xlarge` (16 GB RAM) — the exact hardware where the in-memory `IngestSorted` was OOM-killed during the sort phase (15.7 GB anon RSS). Same SecDek snapshot, same code, same `ChunkSize=500_000`:
+
+- Migration time: **3m 12.9s** (83,757 quads/sec sustained)
+- Memory peak: **~1 GB / 15 GB available**
+- All correctness checks pass; same subjects/predicates hashes as the r6g run
+- No OOM. Process completed cleanly.
+
+**Only 4% slower than the same workload on `r6g.2xlarge`.** That's the bounded-memory claim landing — the algorithm's working set is set by `ChunkSize`, not by corpus size or host RAM. SlideDek-class workloads (133M+ quads) on `t4g.xlarge` should land at roughly the same memory profile, scaled up only by the number of intermediate run files written to disk.
+
+Raw archives:
+- [`secdek-ingest-external-r6g-2026-05-06.log`](./bench-output/secdek-ingest-external-r6g-2026-05-06.log)
+- [`secdek-ingest-external-t4g-2026-05-06.log`](./bench-output/secdek-ingest-external-t4g-2026-05-06.log)
+
+### The full ladder, measured
+
+| variant | host | 16M quads time | sustained rate | memory peak | OOM safe at this scale? |
+|---|---|---|---|---|---|
+| Standard `BulkLoader` (with merger) | t4g.xlarge / 16 GB | 17m 1.9s | 15,809 q/s | few hundred MB | ✓ |
+| `IngestSorted` (in-memory) | r6g.2xlarge / 62 GB | **2m 32.1s** | 106,203 q/s | ~9 GB | ✓ |
+| `IngestSorted` (in-memory) | t4g.xlarge / 16 GB | OOM-killed | — | 15.7 GB RSS at kill | ❌ |
+| `IngestSortedExternal` | r6g.2xlarge / 62 GB | 3m 4.9s | 87,373 q/s | **~1 GB** | ✓ |
+| **`IngestSortedExternal`** | **t4g.xlarge / 16 GB** | **3m 12.9s** | **83,757 q/s** | **~1 GB** | **✓** |
+
+Choosing between the two fast paths:
+- **In-memory** is 22% faster but has a hard memory ceiling. Right when you know the corpus fits in RAM (caller controls this) and you want maximum speed.
+- **External sort** is bounded-memory and runs at 80-90% of in-memory speed on the same workload. Right when corpus size approaches host RAM, OR when running on a smaller bench host than the source data would fit on.
+
+For SecDek's 16M corpus at `t4g.xlarge` scale, either path works after sizing up to a 64 GB box for the in-memory variant. For SlideDek's 133M+ corpus, `IngestSortedExternal` is the only viable path on any host smaller than ~60 GB.
 
 **Implication for callers.** If your corpus exceeds your bench host's RAM divided by ~500 bytes per quad, the in-memory variant will OOM-kill you cleanly mid-migration. There's no graceful degradation. Either size up the bench host (cheaper than dev time most of the time) or wait for `IngestSortedExternal`. Production cutover hosts can be smaller than the bench host — the bulk-load box doesn't have to be the steady-state runtime.
 
