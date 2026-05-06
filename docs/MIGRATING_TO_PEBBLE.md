@@ -304,6 +304,70 @@ Choosing between the two fast paths:
 
 For SecDek's 16M corpus at `t4g.xlarge` scale, either path works after sizing up to a 64 GB box for the in-memory variant. For SlideDek's 133M+ corpus, `IngestSortedExternal` is the only viable path on any host smaller than ~60 GB.
 
+### The per-corpus driver pattern (no new API; just a usage shape)
+
+The third level of the ladder isn't a new API — it's a way to use the existing `IngestSorted` calls that maps cleanly onto how upstream data actually arrives.
+
+**The observation.** Real-world bulk-ingest workloads almost never look like "one giant slice of every quad in the universe." They look like *many corpora, ingested sequentially*: one Turtle file per book, one ArangoDB collection per query family, one S3 prefix per data source. Each individual corpus fits in RAM; the union doesn't.
+
+If your producer can group input by such a natural boundary, you don't need `IngestSortedExternal`'s on-disk merge sort at all. You can use the **in-memory `IngestSorted` per corpus**, calling it sequentially against the same destination Pebble dir. Each call is its own atomic ingest at the Pebble layer. Memory peak stays bounded at the size of the *largest individual corpus*, not the sum.
+
+**The shape:**
+
+```go
+import (
+    "context"
+    "log"
+
+    "github.com/dukkandcards/quadstore"
+)
+
+func ingestAll(ctx context.Context, dst *quadstore.PebbleStore, corpora []Corpus) error {
+    for _, c := range corpora {
+        quads, err := c.LoadAll()       // caller-supplied; may be a streaming
+        if err != nil {                  // pull from a source DB, a Turtle parse,
+            return err                   // an ArangoDB AQL result, etc.
+        }
+
+        stats, err := dst.IngestSorted(ctx, quads, quadstore.IngestSortedOptions{
+            DefaultLabel: c.Label,       // "source:turtle-book-N",
+        })                                // "source:aql-collection-X", etc.
+        if err != nil {
+            return err
+        }
+        log.Printf("ingested %s: %d quads in %s",
+            c.Name, stats.QuadsIngested, stats.Duration)
+    }
+
+    // After all corpora are in, label counters reflect "writes
+    // attempted" (matching the per-Commit semantics). If your
+    // upstream had duplicates within or across corpora, the LSP
+    // keyspace deduped them but the counters didn't — rebuild from
+    // truth here:
+    if err := dst.RebuildLabelCounters(); err != nil {
+        return err
+    }
+
+    return nil
+}
+```
+
+**Why this is the right shape for many real consumers:**
+
+- **Failure isolation.** If corpus 47 of 200 fails to load from upstream, you retry corpus 47. Corpora 1-46 already landed; 48-200 haven't started. No `WHERE imported_at >= 'last attempt'` ceremony.
+- **Memory bounded by *individual* corpus size, not corpus count.** 200 corpora at 5M quads each fit on a 16 GB host one at a time, even though the union (1B quads) doesn't fit anywhere reasonable.
+- **No external-sort overhead.** Each `IngestSorted` call uses the in-memory variant, which is 22% faster than `IngestSortedExternal`. You skip the run-file write/read cost.
+- **Composable with concurrency** (carefully). Pebble's `db.Ingest` is atomic per call but not parallel-safe across calls; you need to serialize the `IngestSorted` calls. The data-loading work upstream of each call (AQL execution, Turtle parsing, etc.) can run in parallel — typically a producer-pool that fills a "ready corpus" channel that one ingester goroutine drains.
+- **Resumable migrations.** Track which corpora have been ingested in a sentinel file or a separate small SQLite/Pebble of "ingest progress." A re-run after a crash skips already-completed corpora.
+
+**Where it doesn't fit:**
+
+- Your upstream is one logical thing that doesn't decompose into corpora — e.g., a single huge JSON file you can't seek into. Use `IngestSortedExternal` directly.
+- Your upstream's "natural" corpora are still individually larger than RAM. Use `IngestSortedExternal` per corpus.
+- You need the destination Pebble dir to reflect a fully-consistent snapshot at every moment (no partial state visible). Either ingest into a fresh dir then atomically swap pointers (caller-side), or use a transaction-shaped layer above quadstore.
+
+**SlideDek's port shape (forward-looking).** The AQL→quadstore port (`yeti-portrait/cmd/aql-checklist`, 197 AQL queries to translate) is the canonical case. Each AQL collection becomes one corpus; each port-pass through the checklist is "load corpus N from ArangoDB, IngestSorted it into the destination Pebble dir, commit checklist progress." 200-ish corpora, none individually larger than RAM, summed they're 133M+ quads. Per-corpus driver is the right pattern; `IngestSortedExternal` is the fallback if any single corpus turns out to be RAM-sized.
+
 **Implication for callers.** If your corpus exceeds your bench host's RAM divided by ~500 bytes per quad, the in-memory variant will OOM-kill you cleanly mid-migration. There's no graceful degradation. Either size up the bench host (cheaper than dev time most of the time) or wait for `IngestSortedExternal`. Production cutover hosts can be smaller than the bench host — the bulk-load box doesn't have to be the steady-state runtime.
 
 ### Why migration takes the time it does
