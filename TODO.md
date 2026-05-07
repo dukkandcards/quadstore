@@ -249,6 +249,18 @@ go run ./cmd/ingest-index/ \
       catalyst — matter/event/conjunction writes)
 - [ ] When LawDek imports: revisit decklib thin wrapper design
 
+### Untracked WIP — check back (flagged 2026-05-07 during Phase 2 commit)
+- [ ] **`bench_scale_test.go`** (May 5 13:42, untracked). 1M-quad scale
+      benchmarks (`BenchmarkScale_*`) for LSM/B-tree shape at sizes where
+      small-N benches may not extrapolate. SecDek-class predicate
+      cardinality (100 distinct). **Decide:** finish + commit, or delete.
+      Currently dangling; would be shadowed by future renames if left.
+- [ ] **`quadstore.test`** (May 5 11:31, untracked). Compiled test binary
+      from `go test -c` against the bench file above. Should be in
+      `.gitignore` regardless — `*.test` matches Go's compiled-test
+      output convention. Add to `.gitignore` whether or not the bench
+      file lands.
+
 ### Performance — flagged 2026-04-19 by SlideDek port (do not start until cutover stable)
 **Context:** First production-scale workload. SlideDek loaded 60K+ decks /
 133M+ quads via BulkLoader; full rebuild took ~4 hours (single-threaded
