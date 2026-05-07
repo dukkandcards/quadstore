@@ -125,6 +125,25 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+// OpenReadOnly opens an existing Pebble store at path in read-only
+// mode. Same merger registration as Open, so callers verifying a
+// checkpoint or backup snapshot don't trip Pebble's "merger name
+// mismatch" check on SST files written by the read-write path.
+//
+// Read-only stores accept Reader operations but every Writer / Bulk
+// path will fail with a Pebble read-only error.
+func OpenReadOnly(path string) (*Store, error) {
+	db, err := pebble.Open(path, &pebble.Options{
+		Logger:   quietLogger{},
+		Merger:   labelCountMerger,
+		ReadOnly: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &Store{db: db}, nil
+}
+
 // Close releases the Pebble handle. Idempotent.
 func (s *Store) Close() error {
 	if s.closed {
@@ -132,6 +151,22 @@ func (s *Store) Close() error {
 	}
 	s.closed = true
 	return s.db.Close()
+}
+
+// Checkpoint creates a consistent snapshot of the live store at destDir.
+// Pebble's checkpoint is hardlink-based for immutable SSTs and
+// copy-based for the mutable WAL/MANIFEST/CURRENT, so it's atomic and
+// effectively free regardless of store size. The destination directory
+// must not exist; Pebble creates it. The resulting directory is itself a
+// readable Pebble store.
+//
+// Safe to call concurrently with reads and writes against the live
+// store; the snapshot reflects a point-in-time view.
+func (s *Store) Checkpoint(destDir string) error {
+	if s.closed {
+		return errors.New("pebbleq: checkpoint on closed store")
+	}
+	return s.db.Checkpoint(destDir)
 }
 
 // validateLabel mirrors writer.validateLabel.

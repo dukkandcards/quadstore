@@ -45,6 +45,23 @@ type PebbleStore struct {
 // durability matches SQLite's default `synchronous=NORMAL` (lazy
 // fsync). Callers needing strict per-commit durability use
 // (*PebbleWriter).CommitSync.
+// OpenPebbleReadOnly opens an existing Pebble store at path read-only.
+// Same merger registration as OpenPebble, so reading a checkpoint or
+// backup snapshot produced by OpenPebble works without the "merger
+// name mismatch" error Pebble raises on SST mismatch. Useful for
+// verify-side tooling like cmd/pebble-verify in SecDek.
+//
+// All Reader operations work; Writer / BulkLoader / IngestSorted /
+// MigrateToPebble return errors from the underlying Pebble layer.
+// Close releases the read-only handle.
+func OpenPebbleReadOnly(path string) (*PebbleStore, error) {
+	s, err := pebbleq.OpenReadOnly(path)
+	if err != nil {
+		return nil, err
+	}
+	return &PebbleStore{inner: s}, nil
+}
+
 func OpenPebble(path string) (*PebbleStore, error) {
 	s, err := pebbleq.Open(path)
 	if err != nil {
@@ -55,6 +72,19 @@ func OpenPebble(path string) (*PebbleStore, error) {
 
 // Close releases the Pebble handle. Idempotent.
 func (s *PebbleStore) Close() error { return s.inner.Close() }
+
+// Checkpoint creates a consistent snapshot of the live store at destDir
+// using Pebble's hardlink-based checkpoint primitive. The destination
+// must not already exist. The resulting directory is itself a readable
+// Pebble store and the right shape to ship to S3 / tar / restore from.
+//
+// Safe to call concurrently with reads and writes against the live
+// store; the snapshot is point-in-time at the moment Checkpoint
+// returns. Sub-second on stores up to tens of GB because SSTs are
+// hardlinked rather than copied.
+func (s *PebbleStore) Checkpoint(destDir string) error {
+	return s.inner.Checkpoint(destDir)
+}
 
 // Writer returns a *PebbleWriter for this store.
 func (s *PebbleStore) Writer(ctx context.Context) (*PebbleWriter, error) {
