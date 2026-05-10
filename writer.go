@@ -21,6 +21,31 @@ import (
 // On a partitioned Store, every quad in a Batch must route to the same
 // partition; otherwise Writer.Commit returns ErrCrossPartitionBatch.
 //
+// **Adds-then-Removes ordering** — within a single Commit, Adds are
+// applied BEFORE Removes (the SQLite path uses INSERT OR IGNORE then
+// DELETE; the Pebble path mirrors this). The consequence: if the same
+// (subject, predicate, object, label) tuple appears in BOTH the Adds
+// and Removes lists, the net effect is REMOVE (the Add is INSERT OR
+// IGNORE'd as a duplicate, then the Remove deletes the existing row).
+// If the intent is "replace stale set with current set", the caller
+// must diff first and only put quads that are leaving in Removes:
+//
+//	keep := map[string]bool{}
+//	for _, q := range newQuads {
+//	    keep[key(q)] = true
+//	}
+//	for _, q := range existing {
+//	    if !keep[key(q)] {
+//	        removes = append(removes, q)
+//	    }
+//	}
+//
+// Surfaced 2026-05-10 in secdek's force-reemit backfill where every
+// surviving slug got deleted because it was naively included in both
+// lists. Caller-side diff is the right fix; flipping the apply order
+// inside the writer would silently break any caller that relies on
+// the current ordering.
+//
 // NoAudit, when true, suppresses the per-Commit `commits` row and the
 // per-quad `commit_ops` rows. Label validation, partition routing, and
 // the actual `quads` writes still happen, and the whole batch is still
