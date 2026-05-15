@@ -8,10 +8,14 @@
 // on a 16 GB host even with other workloads. Total disk during run:
 // ~size of source data spread across run files; freed at merge time.
 //
-// Right for SlideDek-class consumers (133M+ quads) where the
+// Right for large-corpus consumers (~10M-100M+ quads) where the
 // in-memory IngestSorted variant won't fit in RAM. For smaller
 // corpora the in-memory variant is faster (no run-file write/read
-// overhead).
+// overhead). The 2026-04-19 storage-replacement benchmark — a
+// ~50K-deck / 133M-quad load that informed this variant's sizing —
+// ended up on parquet + DuckDB rather than quadstore, so this
+// path's largest validated workload remains SecDek's 19M-quad
+// snapshot (see docs/MIGRATING_TO_PEBBLE.md "Case study").
 //
 // Caller pulls input from a channel; close the channel when done.
 // Library blocks on chunk-fill, sorts the chunk, flushes a run, and

@@ -4,21 +4,53 @@ A practical guide for moving an existing SQLite-backed quadstore deployment to t
 
 This is **not** a "you must migrate" doc. The SQLite backend is supported indefinitely. Migrate when the tradeoffs add up for your deployment — and stop when they don't. The guide below is the framework for deciding *and* the mechanics for executing.
 
-> **Live experiment status (resolved 2026-05-06).** SecDek's
-> production state turned out to be single-file SQLite (the
-> partition migration was tooled but never deployed), so the
-> Option-B "consolidate two partitions" hypothesis didn't apply
-> — the migration is just `single-file SQLite → single-Pebble
-> dir`. The first hot-read bench surfaced a real structural gap:
-> Pebble's `Reader.Count(Pattern{Label: X})` was 4-5× **slower**
-> than SQLite's covering-index path (180 ms vs 38 ms). Fix
-> shipped: a per-label counter keyspace maintained via Pebble's
-> Merge operator. After the fix, Pebble is **5,418× faster**
-> than SQLite on the same query (0.01 ms vs 38 ms) — full
-> numbers and methodology in the "Case study" section below.
-> The cutover is now ready to plan; the IngestSorted bulk-ingest
-> fast path is queued as the next library improvement for
-> larger-than-SecDek consumers.
+> **SecDek cutover status (2026-05-15): LANDED on second attempt.**
+> The full sequence — preserved for posterity because the
+> rollback-then-retry shape is itself the lesson:
+>
+> 1. **2026-05-06** first cutover. The two-partition Option-B
+>    hypothesis turned out moot — production was always single-file
+>    SQLite — so this was just `single-file SQLite → single-Pebble
+>    dir`. Cutover landed; first hot-read bench surfaced a
+>    structural gap: `Reader.Count(Pattern{Label: X})` was 4-5×
+>    *slower* than SQLite's covering-index path (180 ms vs 38 ms).
+>    Fix shipped: per-label counter keyspace via Pebble's Merge
+>    operator. After the fix, **5,418× faster** than SQLite on the
+>    same query (0.01 ms vs 38 ms).
+> 2. **2026-05-07 morning** rolled back. The Pebble cutover broke
+>    SecDek's pre-cutover multi-binary writer stack — server +
+>    5 timer-driven writer binaries each opened the SQLite file
+>    via WAL. Pebble holds an *exclusive process file lock* on its
+>    data directory: only one process at a time. Rollback to
+>    SQLite was a clean env-var flip in ~30 seconds.
+> 3. **2026-05-07/08** architectural rebuild: in-process Job
+>    scheduler (`internal/scheduler`) inside the server binary;
+>    the 5+ writer binaries became goroutines instead of separate
+>    processes. The cmd/X binaries remain for operator backfill
+>    but no longer hold the Pebble lock concurrently. Documented
+>    as the **dek-scheduler pattern** and lifted to the dek
+>    architecture rule set.
+> 4. **2026-05-08+** second cutover landed incrementally as the
+>    Phase A/B corpus loads (speeches, press releases, advisory
+>    materials, PCAOB, weekly movers, BrokerCheck resolvers)
+>    ran directly into the prod Pebble dir.
+> 5. **2026-05-15** current state: production has been on Pebble
+>    for a week. ~3.4 GB Pebble dir (vs ~30 GB pre-cutover
+>    SQLite), 27 in-process Jobs gated on
+>    `SECDEK_SCHEDULER_ENABLED=1`, nightly Checkpoint + tar.gz
+>    backup to S3. SQLite file (`/var/lib/secdek/secdek.db`)
+>    removed post-soak.
+>
+> **The lesson worth carrying:** Pebble's single-writer-process
+> constraint is binding. Any consumer migrating from a
+> multi-writer-process SQLite shape (server + timer binaries +
+> backfill CLIs all opening the file) must consolidate writers
+> *before* the cutover, not as a recovery step. Three viable
+> shapes for the consolidation: in-process scheduler goroutines
+> (what SecDek shipped), admin-endpoint writers, or file-feed
+> writers. See `feedback_pebble_single_writer` for the binding
+> constraint and `project_dek_scheduler_pattern` for the
+> consolidation pattern.
 
 ## Decide whether to migrate at all
 

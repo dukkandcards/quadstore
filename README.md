@@ -103,7 +103,7 @@ If you need a query language an analyst can run, sharding across machines, or bu
 
 ## The other things that mattered
 
-**Pebble-backed by default.** quadstore runs on [Pebble](https://github.com/cockroachdb/pebble), CockroachDB's pure-Go LSM storage engine. The Pebble work was driven by the largest internal user — a 60K+ PPTX deck corpus with **133M quads / 60 GB** on SQLite where the index rebuild on bulk-load `Close` was running for tens of minutes. On cloud disks (gp3 EBS), single-quad audited Commit is **40× faster** than the SQLite-backed alternative; bulk loads at 100k rows are **5.5× faster**; on-disk size is **≈10× smaller** (28 GB SecDek production snapshot → ~3 GB after Pebble's default zstd block compression). Validated end-to-end on a 19M-quad production graph round-tripped byte-perfectly between backends. Numbers and methodology in [`docs/PEBBLE_VS_SQLITE.md`](docs/PEBBLE_VS_SQLITE.md).
+**Pebble-backed by default.** quadstore runs on [Pebble](https://github.com/cockroachdb/pebble), CockroachDB's pure-Go LSM storage engine. The Pebble work was sized for an anticipated 100M+ quad analysis corpus — a 2026-04-19 storage-replacement benchmark loaded a 53K-deck SlideDek port-target into the SQLite backend and showed `Close`-time index rebuild dominating for tens of minutes on 60+ GB / 133M-quad shape. The benchmark's consumer ultimately moved to a columnar (parquet + DuckDB) storage layer better suited to its aggregation-heavy workload, so the 133M-quad figure is *projected* sizing rather than a live workload. The SQLite scaling pain measured by that benchmark is real, and addressing it is what v0.2 delivered. On cloud disks (gp3 EBS), single-quad audited Commit is **40× faster** than the SQLite-backed alternative; bulk loads at 100k rows are **5.5× faster**; on-disk size is **≈10× smaller** (30 GB SecDek production snapshot → 3.4 GB live Pebble dir after default zstd block compression). Validated end-to-end on a 19M-quad production graph round-tripped byte-perfectly between backends, then deployed to live production on SecDek 2026-05-08. Numbers and methodology in [`docs/PEBBLE_VS_SQLITE.md`](docs/PEBBLE_VS_SQLITE.md).
 
 **Pure Go.** Both backends. No CGo, no `libsqlite3`, no `librocksdb`. `go build` is enough. Cross-compiles to `linux/arm64` from `darwin/arm64` with no setup. Lambda and distroless containers work without ceremony. Most embedded-graph stories have a CGo footnote that breaks somebody's day; this one doesn't.
 
@@ -138,22 +138,45 @@ a concrete user requests them.
 **Why this exists.** quadstore came out of moving off
 ArangoDB after its 3.12 BSL / Community License change made
 it unworkable for our projects. The first big port target was
-a 60K+ PPTX-analysis product whose corpus, exercised against
-quadstore's SQLite path, hit ~4-hour bulk loads where the
-index rebuild on `Close` dominated for tens of minutes on a
-60+ GB / 133M-quad table. That's the pain the Pebble work in
-v0.2 was answering.
+a 60K+ PPTX-analysis product whose 2026-04-19 storage-replacement
+benchmark hit ~4-hour bulk loads on the SQLite path with the
+index rebuild on `Close` dominating for tens of minutes. The
+consuming project ultimately moved its analytics corpus to
+parquet + DuckDB (better fit for its aggregation queries), but
+the SQLite pain that benchmark surfaced was real and is what the
+Pebble work in v0.2 was answering.
 
-**Production users today.**
+**Production users today (2026-05-15).**
 [**SecDek**](https://sfy.io) — corporate-intel SaaS over SEC
-no-action letters — runs quadstore on the SQLite backend at
-**19M quads / 28 GB** with ~10K quads/sec sustained ingest and
-sub-millisecond indexed lookups. The same 19M-quad snapshot was
-the byte-perfect round-trip that validated `MigrateToPebble`
-end-to-end on real production data — but no consumer has
-flipped to Pebble in production yet. Other internal dek
-products (SlideDek and the rest of the family) are mid-port
-from ArangoDB; this README will list them once they're live.
+no-action letters — runs quadstore on the **Pebble** backend at
+**3.4 GB on disk / ~19M+ quads / ~280 active predicates / 27
+in-process Jobs** (single-binary EC2 t4g.large, nightly Checkpoint
++ tar.gz backup to S3 with GLACIER_IR + DEEP_ARCHIVE lifecycle).
+First production Pebble cutover landed 2026-05-08 after a
+2026-05-06 attempt was rolled back the next day on a multi-writer-
+process incompatibility; the architectural rebuild (in-process Job
+scheduler folding 5+ timer-driven binaries into goroutines inside
+the server process) unblocked the second cutover. SecDek's
+pre-cutover 19M-quad SQLite snapshot was the byte-perfect
+round-trip that validated `MigrateToPebble` on real production
+data.
+
+[**lawdek-v2**](https://lawdek.com) — patent litigation scheduling
++ chart corpus — runs quadstore on the **SQLite** backend inside
+AWS Lambda. `<10 MB` SQLite file on Lambda `/tmp`, restored from
+`s3://lawdek-v2-state/lambda/lawdek.db` on cold start, synchronous
+PutObject after every write (WAL `TRUNCATE` checkpoint first, fix
+shipped 2026-04-16 after a silent-data-loss-on-cold-start
+incident). ~47 active predicates total; stateless HMAC-signed
+session cookies (no `meta:session` rows). Pinned to a 2026-04-14
+commit — pre-v0.2 Pebble — and feature-sufficient for the
+workload.
+
+Both backends are production-validated. Other internal dek
+products that were originally planned to host on quadstore
+(SlideDek, IGdek) ended up on different stacks (parquet + DuckDB
+for analytics; bespoke storage per product) — none import
+quadstore today, and that's fine. Match tool to workload.
 
 Both backends are supported indefinitely. Whether `Open()`
 flips its default backend at `v1.0.0` is an open question —
@@ -193,7 +216,7 @@ The Pebble backend (recommended as of v0.2) stands on [**Pebble**](https://githu
 - [`docs/LIMITATIONS.md`](./docs/LIMITATIONS.md) — every known way this is worse than what you might have hoped for; read before adopting
 - [`docs/RETHINK_2026.md`](./docs/RETHINK_2026.md) — self-audit: §1 (storage engine) shipped as Pebble in v0.2; §2-§6 still forward-looking
 - [`docs/PEBBLE_VS_SQLITE.md`](./docs/PEBBLE_VS_SQLITE.md) — head-to-head bench numbers (5 of 6 metrics Pebble on M1, 6 of 6 on Linux gp3) and the v1.0 default-flip question
-- [`docs/MIGRATING_TO_PEBBLE.md`](./docs/MIGRATING_TO_PEBBLE.md) — practical migration guide; includes the SecDek experiment-in-progress (consolidating partitioned SQLite into a single Pebble dir)
+- [`docs/MIGRATING_TO_PEBBLE.md`](./docs/MIGRATING_TO_PEBBLE.md) — practical migration guide; includes the SecDek case study (2026-05-06 first cutover rolled back next day on multi-writer-process incompatibility; in-process scheduler rebuild on 2026-05-07/08 unblocked the second cutover; production has been on Pebble since 2026-05-08)
 - [`docs/PARTITIONING_DESIGN.md`](./docs/PARTITIONING_DESIGN.md) — partition routing model and migration semantics
 - [`docs/INCREMENTAL_PROCESSING.md`](./docs/INCREMENTAL_PROCESSING.md) — patterns for ingest pipelines that don't re-derive the whole world every tick
 - [`CHANGELOG.md`](./CHANGELOG.md) — version history with breaking-change callouts

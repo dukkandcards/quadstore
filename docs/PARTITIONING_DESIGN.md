@@ -26,9 +26,13 @@ Per `TODO.md`:
 > separate tables per namespace or label-prefixed indexes.
 
 This is a library-level feature: any consumer with multiple fact families
-that don't share queries (SlideDek's per-corpus loads, IGdek's per-customer
-markup, LawDek's per-matter writes, mega-index's per-book corpora) hits
-the same wall eventually.
+that don't share queries (e.g. SecDek's per-corpus partitioning candidate
+on SQLite, hypothetical per-matter / per-tenant / per-book splits in
+other consumers) hits the same wall eventually. As of 2026-05-15 no
+live consumer is actively using `OpenPartitioned`; SecDek's brief
+partition-SQLite experiment (`main.db` + `corpus.db`) was rolled back
+inside a day in favor of single-dir Pebble, which removes the B-tree
+dilution problem partitioning was solving on SQLite.
 
 ## Non-goals
 

@@ -55,35 +55,44 @@ for callers who want ~20 fewer transitive deps, smaller binaries, or
       `sqlite3`-CLI escape hatch; this is the replacement when
       operators start asking for one.
 
-### Consumer-level open work (per-product migration)
+### Consumer-level work (per-product status, 2026-05-15)
 
-Forcing function for SecDek migration: **secdek-sqlite-busy** is a
-live production alarm. The 19M-quad SecDek snapshot already
-round-trips byte-perfectly via `MigrateToPebble` — see
-`docs/bench-output/secdek-correctness-2026-05-05.txt`. Production
-cutover is a separate plan owned by the SecDek repo, not by
-quadstore.
+#### DONE 2026-05-08 — SecDek SQLite → Pebble cutover
 
-#### Active: SecDek SQLite (partitioned) → Pebble (single dir)
+First production Pebble consumer. Cutover landed 2026-05-08 after
+a 2026-05-06 attempt was rolled back the next day on the
+multi-writer-process incompatibility (`feedback_pebble_single_writer`).
+Production runs single-dir Pebble at `/var/lib/secdek/pebble.dir`
+(~3.4 GB live, ~10× compression vs the pre-cutover ~30 GB SQLite).
+Architectural prerequisite was solved by an in-process Job
+scheduler in `secdek-server` — fold 5+ timer-driven writer
+binaries into goroutines inside the server process. Detail in
+SecDek's `docs/runbooks/pebble-cutover.md` status banner and
+CHANGELOG 2026-05-07/08 "Post-rollback rebuild" entry.
 
-In progress as of 2026-05-06. SecDek is the first real-world
-cutover from `OpenPartitioned` to `OpenPebble`. Going with
-**Option B** from `docs/MIGRATING_TO_PEBBLE.md`: consolidate
-the two-partition SQLite layout into one Pebble dir on the
-hypothesis that Pebble's LSM + per-sstable Bloom filters
-remove the B-tree dilution problem partitioning was solving
-in SQLite. **Live experiment** — measurements come back into
-the migration guide's "Case study" section as they land,
-positive or negative. If consolidation underperforms, the
-fallback is Option A (build `OpenPartitioned` on Pebble in
-this library).
+The pre-cutover 19M-quad SQLite snapshot was the byte-perfect
+round-trip that validated `MigrateToPebble` — see
+`docs/bench-output/secdek-correctness-2026-05-05.txt`. Live
+operational lessons (multi-writer constraint, nightly backup via
+admin Checkpoint endpoint + tarball + S3) are now reflected in
+`docs/MIGRATING_TO_PEBBLE.md`.
 
-Each other consumer (yeti-portrait/SlideDek, lawdek-v2,
-igdek) chooses independently based on whether dep size, binary
-size, or `sqlite3`-CLI access matters more than per-commit
-latency for that product. Lambda-bound products may stay on
-SQLite for binary-size reasons even after this decision —
-LawDek-v2 is the canonical "stay on SQLite" case for now.
+#### Stays on SQLite — lawdek-v2 (Lambda)
+
+LawDek-v2 (live at lawdek.com on AWS Lambda) is the canonical
+"stay on SQLite" case: <10 MB SQLite file on Lambda `/tmp`,
+restored from `s3://lawdek-v2-state/lambda/lawdek.db` on cold
+start, PutObject after every write. Pinned to a 2026-04-14
+quadstore commit (pre-v0.2 Pebble) and feature-sufficient for
+the workload. No reason to flip.
+
+#### Not consumers — SlideDek, IGdek, mega-index
+
+Originally planned to host on quadstore; ended up on different
+stacks for workload-fit reasons (parquet + DuckDB for SlideDek's
+analytics queries; bespoke per-product storage elsewhere). None
+import quadstore today, and that's the right call — match tool
+to workload. See README "Production users today" for context.
 
 ### v1.0 open question
 
@@ -237,17 +246,30 @@ go run ./cmd/ingest-index/ \
 - [x] Full test coverage for new surface (25 tests total passing)
 
 ### Decided, documented in memory
-- Standalone module ✓ (decklib thin wrapper deferred until 2nd non-PubDek consumer)
+- Standalone module ✓
+- **decklib thin wrapper — NOT WANTED** (decided 2026-05-15). The
+  "deferred until 2nd non-PubDek consumer" gate fired (lawdek-v2
+  imports quadstore directly), but post-decision the verified
+  reality is that the two live consumers — SecDek (Pebble, 27
+  in-process Jobs, ~280 predicates) and lawdek-v2 (SQLite Lambda,
+  ~47 predicates, stateless cookies) — have dramatically different
+  write patterns. There is no shared shape to wrap that wouldn't
+  immediately rot. Future consumers will import quadstore directly
+  too.
 - External DB candidates ruled out (we're writing our own)
 - Concurrent-writer evolution ladder (Rungs 1-5, no named Rung 6)
 
 ### Next
+- [x] **DONE 2026-05-08** — First real product integration: SecDek
+      cutover to Pebble (after 2026-05-06 rollback + in-process
+      scheduler rebuild). Now the canonical Pebble production
+      reference; live operational learnings reflected in README's
+      "Production users today" + `docs/MIGRATING_TO_PEBBLE.md`.
 - [ ] mega-index migration: update label writes (`reference` → `source:reference`;
       `generated` → `derived:generated`; `signal/*` → `derived:signal-*`; etc.)
       Do opportunistically when mega-index is next edited.
-- [ ] First real product integration via new API (LawDek is the likely
-      catalyst — matter/event/conjunction writes)
-- [ ] When LawDek imports: revisit decklib thin wrapper design
+      (Note: mega-index does not yet import quadstore in `go.mod`;
+      this item activates when/if it does.)
 
 ### Untracked WIP — check back (flagged 2026-05-07 during Phase 2 commit)
 - [ ] **`bench_scale_test.go`** (May 5 13:42, untracked). 1M-quad scale
@@ -261,11 +283,16 @@ go run ./cmd/ingest-index/ \
       output convention. Add to `.gitignore` whether or not the bench
       file lands.
 
-### Performance — flagged 2026-04-19 by SlideDek port (do not start until cutover stable)
-**Context:** First production-scale workload. SlideDek loaded 60K+ decks /
-133M+ quads via BulkLoader; full rebuild took ~4 hours (single-threaded
-JSON decode + ~500-row INSERT VALUES batches), final on-disk size ~60 GB
-for 133M quads = **~444 bytes per quad**. Storage is the main cost — we
+### Performance — measured 2026-04-19 storage-replacement benchmark (historical context)
+**Context:** A 2026-04-19 storage-replacement benchmark loaded a
+~50K-deck analysis corpus directly into the SQLite backend via
+BulkLoader. Full rebuild took ~4 hours (single-threaded JSON
+decode + ~500-row INSERT VALUES batches), final on-disk size
+~60 GB for 133M quads = **~444 bytes per quad**. The consuming
+project's architecture ultimately moved its corpus to parquet +
+DuckDB (the workload was 84% tabular aggregation, not graph),
+so the benchmark is "what doesn't fit" sizing evidence rather
+than a live production workload. Storage is the main cost — we
 are paying 4-5× what a column-encoded triple store would for the same
 data. The corpus also exercises the writer slot exclusively for the load
 duration, blocking any parallel consumer.
