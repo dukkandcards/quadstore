@@ -2,6 +2,7 @@
 /ingest-index
 *.exe
 *.db
+*.test
 
 # OS
 .DS_Store
